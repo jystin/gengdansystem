@@ -1,0 +1,117 @@
+<view class="container page-orders">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+  <view class="header card">
+    <!-- 标题行：标题 + 操作按钮 -->
+    <view class="header-top">
+      <view class="title">工单列表</view>
+      <view class="header-btns">
+        <button wx:if="{{isAdmin}}" size="mini" class="mini-btn {{selectMode ? 'active' : ''}}" bindtap="toggleSelectMode">{{selectMode ? '取消' : '导出'}}</button>
+        <button size="mini" class="mini-btn" bindtap="openScan">扫码</button>
+      </view>
+    </view>
+
+    <!-- 管理员操作栏：选择模式下显示 -->
+    <view wx:if="{{isAdmin && selectMode}}" class="export-bar">
+      <view class="export-info">已选 {{selectedCount}} 项</view>
+      <view class="export-btns">
+        <button class="export-btn primary" bindtap="exportSelected" disabled="{{selectedIds.length === 0}}">导出选中</button>
+        <button class="export-btn secondary" bindtap="showDateRangePicker">按时间导出</button>
+        <button class="export-btn secondary" bindtap="showCustomerPicker">按客户导出</button>
+        <button class="export-btn secondary" bindtap="exportAll">导出全部</button>
+      </view>
+    </view>
+
+    <!-- 分类标签 + 搜索框 合并一行 -->
+    <view class="filter-row">
+      <scroll-view scroll-x class="category-scroll" show-scrollbar="{{false}}">
+        <view class="category-bar">
+          <block wx:for="{{categoryOptions}}" wx:key="key">
+            <view class="category-pill {{activeCategory === item.key ? 'active' : ''}}" bindtap="onCategoryTap" data-category="{{item.key}}">
+              <text>{{item.label}}</text>
+            </view>
+          </block>
+        </view>
+      </scroll-view>
+    </view>
+
+    <view class="search-box">
+      <input class="search-input" placeholder="输入单号 / 客户 / 种类搜索" value="{{keyword}}" bindinput="onKeywordInput" />
+    </view>
+  </view>
+
+  <view class="list card">
+    <block wx:for="{{filteredOrders}}" wx:key="id">
+      <view class="order-card {{item.urgent ? 'urgent' : ''}} {{selectMode ? 'select-mode' : ''}}" bindtap="{{selectMode ? 'toggleSelect' : 'openOrder'}}" data-id="{{item.id}}">
+        <!-- 选择模式：复选框 -->
+        <view wx:if="{{selectMode}}" class="check-wrap" catchtap="toggleSelect" data-id="{{item.id}}">
+          <view class="checkbox {{item._checked ? 'checked' : ''}}"></view>
+        </view>
+
+        <view class="order-content">
+          <view class="row order-top">
+            <view class="order-id">{{item.id}}</view>
+            <text class="badge {{item.category === 'paused' ? 'badge-warning' : item.category === 'completed' ? 'badge-success' : item.category === 'overdue' ? 'badge-danger' : item.category === 'urgent' ? 'badge-urgent' : 'badge-info'}}">{{item.categoryLabel}}</text>
+          </view>
+          <view class="subtle">{{item.customerName}}</view>
+          <view class="meta-row">
+            <text>种类 {{item.type}}</text>
+            <text>尺寸 {{item.size}}</text>
+            <text>交期 {{item.dueDate}}</text>
+            <text wx:if="{{item.completedDate}}">完成 {{item.completedDate.split(' ')[0]}}</text>
+          </view>
+          <view class="progress-line">
+            <view class="progress-bar">
+              <view class="progress-fill" style="width: {{item.progress}}%"></view>
+            </view>
+            <text class="progress-text">{{item.progress}}%</text>
+          </view>
+          <view class="subtle">当前工序：{{item.currentStepName}} · {{item.currentStation}}</view>
+        </view>
+      </view>
+    </block>
+
+    <view wx:if="{{filteredOrders.length === 0}}" class="empty-hint">暂无匹配的工单</view>
+  </view>
+
+  <!-- 日期范围选择弹窗 -->
+  <view wx:if="{{showDatePicker}}" class="modal-mask" bindtap="onMaskTap" catchtouchmove>
+    <view class="modal-content">
+      <view class="modal-title">选择下单日期范围</view>
+      <view class="date-row">
+        <view class="date-field">
+          <view class="date-label">开始日期</view>
+          <picker mode="date" value="{{dateStart}}" bindchange="onDateStartChange">
+            <view class="date-value" bindtap="onPickerAreaTap">{{dateStart || '请选择'}}</view>
+          </picker>
+        </view>
+        <text class="date-sep">至</text>
+        <view class="date-field">
+          <view class="date-label">结束日期</view>
+          <picker mode="date" value="{{dateEnd}}" bindchange="onDateEndChange">
+            <view class="date-value" bindtap="onPickerAreaTap">{{dateEnd || '请选择'}}</view>
+          </picker>
+        </view>
+      </view>
+      <view class="modal-actions">
+        <button class="modal-btn cancel" bindtap="hideDatePicker">取消</button>
+        <button class="modal-btn confirm" bindtap="confirmDateRangeExport">确认导出</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 按客户导出弹窗 -->
+  <view wx:if="{{showCustomerPicker}}" class="modal-mask" bindtap="onMaskTap" catchtouchmove>
+    <view class="modal-content" catchtap="onCustomerPickerAreaTap">
+      <view class="modal-title">选择客户导出</view>
+      <picker mode="selector" range="{{customerOptions}}" index="{{selectedCustomerIndex}}" bindchange="onCustomerChange">
+        <view class="customer-pick-btn">{{customerOptions[selectedCustomerIndex]}}</view>
+      </picker>
+      <view class="modal-actions">
+        <button class="modal-btn cancel" bindtap="hideCustomerPicker">取消</button>
+        <button class="modal-btn confirm" bindtap="confirmCustomerExport">确认导出</button>
+      </view>
+    </view>
+  </view>
+</view>

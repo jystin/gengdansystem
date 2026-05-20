@@ -1,0 +1,360 @@
+.page-orders {
+  padding-bottom: 40rpx;
+}
+
+.header {
+  padding: 24rpx 28rpx;
+}
+
+/* 标题行 */
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-top .title {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.header-btns {
+  display: flex;
+  gap: 12rpx;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 筛选行：分类标签横向滚动 */
+.filter-row {
+  margin-top: 20rpx;
+  white-space: nowrap;
+}
+
+.category-scroll {
+  width: 100%;
+}
+
+.category-bar {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 12rpx;
+  padding: 4rpx 0;
+}
+
+.category-pill {
+  padding: 14rpx 22rpx;
+  border-radius: 999rpx;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 24rpx;
+}
+
+.category-pill.active {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.search-box {
+  margin-top: 18rpx;
+}
+
+.mini-btn {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-width: 0 !important;
+  max-width: none;
+  width: auto !important;
+  padding: 10rpx 24rpx;
+  line-height: 1.6;
+  border-radius: 10rpx;
+  background: #0f766e !important;
+  color: #ffffff !important;
+  font-size: 24rpx;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.mini-btn.active {
+  background: #dc2626;
+}
+
+.list {
+  margin-top: 24rpx;
+  padding: 0 24rpx;
+}
+
+.order-card {
+  padding: 24rpx 0;
+  border-top: 1rpx solid #e2e8f0;
+  display: flex;
+  align-items: flex-start;
+}
+
+.order-card.urgent {
+  background: #fef2f2;
+  border-radius: 12rpx;
+  margin: 16rpx -24rpx;
+  padding: 24rpx;
+  border-left: 6rpx solid #dc2626;
+}
+
+.order-card.select-mode {
+  padding: 24rpx 16rpx;
+  border-radius: 12rpx;
+  margin: 8rpx 0;
+  border: 1rpx solid #e2e8f0;
+  background: #fafafa;
+}
+
+.order-card.select-mode:active {
+  background: #f0f0f0;
+}
+
+.order-card:first-child {
+  border-top: none;
+}
+
+/* 复选框 */
+.check-wrap {
+  margin-right: 16rpx;
+  padding-top: 8rpx;
+  flex-shrink: 0;
+}
+
+/* 复选框：未选中 = 白底灰边框 */
+.checkbox {
+  width: 38rpx;
+  height: 38rpx;
+  border-radius: 6rpx;
+  border: 2rpx solid #cbd5e1;
+  box-sizing: border-box;
+  position: relative;
+}
+
+/* 选中状态：绿色背景 + 内部白色勾号 */
+.checkbox.checked {
+  background: #0f766e;
+  border-color: #0f766e;
+}
+
+/* 用 ::after 伪元素画白色 √ 勾 */
+.checkbox.checked::after {
+  content: '';
+  position: absolute;
+  left: 12rpx;
+  top: 6rpx;
+  width: 11rpx;
+  height: 20rpx;
+  border-right: 4rpx solid #fff;
+  border-bottom: 4rpx solid #fff;
+  transform: rotate(45deg);
+  border-radius: 2rpx;
+}
+
+.order-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.order-top {
+  gap: 16rpx;
+}
+
+.order-id {
+  font-size: 30rpx;
+  font-weight: 700;
+}
+
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: #64748b;
+}
+
+.progress-line {
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+  margin-top: 16rpx;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 12rpx;
+  background: #e2e8f0;
+  border-radius: 999rpx;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0f766e, #14b8a6);
+  border-radius: 999rpx;
+}
+
+.progress-text {
+  font-size: 22rpx;
+  color: #0f766e;
+  min-width: 60rpx;
+  text-align: right;
+}
+
+/* 导出操作栏 */
+.export-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20rpx;
+  padding: 18rpx 20rpx;
+  background: #f0fdf4;
+  border-radius: 12rpx;
+  border: 1rpx solid #bbf7d0;
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+
+.export-info {
+  font-size: 24rpx;
+  color: #166534;
+  font-weight: 600;
+}
+
+.export-btns {
+  display: flex;
+  gap: 12rpx;
+  flex-wrap: wrap;
+}
+
+.export-btn {
+  font-size: 22rpx;
+  padding: 10rpx 24rpx;
+  border-radius: 8rpx;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.export-btn.primary {
+  background: #0f766e;
+  color: #fff;
+}
+
+.export-btn.primary[disabled] {
+  opacity: 0.5;
+}
+
+.export-btn.secondary {
+  background: #ffffff;
+  color: #0f766e;
+  border: 1rpx solid #0f766e;
+}
+
+/* 空提示 */
+.empty-hint {
+  text-align: center;
+  padding: 80rpx 0;
+  color: #94a3b8;
+  font-size: 28rpx;
+}
+
+/* 日期选择弹窗 */
+.modal-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-content {
+  width: 620rpx;
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 40rpx;
+}
+
+.modal-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 32rpx;
+  color: #1e293b;
+}
+
+.date-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.date-field {
+  flex: 1;
+}
+
+.date-label {
+  font-size: 24rpx;
+  color: #64748b;
+  margin-bottom: 10rpx;
+}
+
+.date-value {
+  font-size: 28rpx;
+  padding: 18rpx 20rpx;
+  border: 1rpx solid #e2e8f0;
+  border-radius: 10rpx;
+  text-align: center;
+  color: #1e293b;
+  background: #f8fafc;
+}
+
+.date-sep {
+  font-size: 26rpx;
+  color: #94a3b8;
+  padding-top: 30rpx;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 20rpx;
+  margin-top: 36rpx;
+}
+
+.modal-btn {
+  flex: 1;
+  font-size: 28rpx;
+  padding: 18rpx 0;
+  border-radius: 10rpx;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.modal-btn.cancel {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.modal-btn.confirm {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+/* 客户选择按钮（与 date-value 风格一致） */
+.customer-pick-btn {
+  font-size: 28rpx;
+  padding: 18rpx 20rpx;
+  border: 1rpx solid #e2e8f0;
+  border-radius: 10rpx;
+  text-align: center;
+  color: #1e293b;
+  background: #f8fafc;
+}

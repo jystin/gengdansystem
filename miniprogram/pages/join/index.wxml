@@ -1,0 +1,33 @@
+<view class="container page-join">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+  <view class="hero card">
+    <view class="title">申请加入系统</view>
+    <view class="subtle">扫描管理员分享的入驻码后，填写姓名和岗位，等待管理员审批通过后即可使用系统。</view>
+    <view class="invite-code">入驻码：{{inviteCode}}</view>
+  </view>
+
+  <view class="section card">
+    <view class="subtitle">填写申请信息</view>
+
+    <view class="form-field">
+      <view class="field-label">姓名<text class="required">*</text></view>
+      <input class="form-input" placeholder="请输入您的姓名" value="{{form.name}}" data-field="name" bindinput="bindField" confirm-type="next" cursor-spacing="20" />
+    </view>
+
+    <view class="form-field">
+      <view class="field-label">岗位<text class="required">*</text></view>
+      <input class="form-input" placeholder="例如：下料工、精车工" value="{{form.station}}" data-field="station" bindinput="bindField" confirm-type="next" cursor-spacing="20" />
+    </view>
+
+    <view class="form-field">
+      <view class="field-label">备注</view>
+      <textarea class="form-textarea" placeholder="选填，可写擅长工序或入职说明" value="{{form.note}}" data-field="note" bindinput="bindField" auto-height maxlength="200" />
+    </view>
+
+    <view class="actions">
+      <button class="primary-btn" bindtap="submitApplication">提交申请</button>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,192 @@
+<view class="container page-create-order" wx:if="{{currentUser.role === 'admin' || currentUser.role === 'superadmin'}}">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+  <view class="hero card">
+    <view class="row">
+      <view>
+        <view class="title">新建工单</view>
+        <view class="subtle">填写订单信息和工序配置后创建流转单</view>
+      </view>
+      <text class="badge badge-info">{{currentUser.role === 'superadmin' ? '超管' : '管理'}}</text>
+    </view>
+    <button class="copy-btn" bindtap="openCopyModal">从已有工单读取</button>
+  </view>
+
+  <view class="section card">
+    <view class="subtitle">订单基本信息</view>
+    <view class="form-grid">
+      <view class="form-field">
+        <view class="field-label">客户名称<text class="required">*</text></view>
+        <input class="input" value="{{form.customerName}}" data-field="customerName" bindinput="bindField" />
+      </view>
+      <view class="form-field">
+        <view class="field-label">种类<text class="required">*</text></view>
+        <input class="input" value="{{form.type}}" data-field="type" bindinput="bindField" />
+      </view>
+      <view class="form-field">
+        <view class="field-label">尺寸<text class="required">*</text></view>
+        <input class="input" value="{{form.size}}" data-field="size" bindinput="bindField" />
+      </view>
+      <view class="form-field">
+        <view class="field-label">数量<text class="required">*</text></view>
+        <input class="input" type="number" value="{{form.qty}}" data-field="qty" bindinput="bindField" />
+      </view>
+      <view class="form-field">
+        <view class="field-label">材质<text class="required">*</text></view>
+        <input class="input" value="{{form.material}}" data-field="material" bindinput="bindField" />
+      </view>
+      <view class="form-field">
+        <view class="field-label">交货期<text class="required">*</text></view>
+        <picker mode="date" value="{{form.dueDate}}" bindchange="bindDueDate">
+          <view class="input date-input">{{form.dueDate || '请选择日期'}}</view>
+        </picker>
+      </view>
+      <view class="form-field">
+        <view class="field-label">单号<text class="required">*</text></view>
+        <input class="input" value="{{form.singleNo}}" data-field="singleNo" bindinput="bindField" />
+      </view>
+    </view>
+
+    <view style="margin-top: 16rpx;">
+      <view class="subtitle" style="margin-bottom: 12rpx;">图纸（拍照上传）<text class="required">*</text></view>
+      <view class="drawing-list">
+        <view wx:if="{{form.drawings.length === 0}}" class="empty-hint">暂无图纸</view>
+        <block wx:else>
+          <view wx:for="{{form.drawings}}" wx:key="name" class="drawing-item">
+            <view class="drawing-info">
+              <view class="drawing-name">{{item.name}}</view>
+              <view class="drawing-size">{{item.size}} 字节</view>
+            </view>
+            <button class="delete-btn" bindtap="removeDrawing" data-index="{{index}}">删除</button>
+          </view>
+        </block>
+      </view>
+      <button class="upload-btn" bindtap="chooseDrawing">+ 上传图纸</button>
+    </view>
+
+    <view style="margin-top: 16rpx;">
+      <view class="subtitle" style="margin-bottom: 12rpx;">图纸细节</view>
+      <view class="form-grid">
+        <view class="form-field">
+          <view class="field-label">下料粗度</view>
+          <input class="input" value="{{form.drawingDetail.blankingRoughness}}" data-field="blankingRoughness" data-sub="drawingDetail" bindinput="bindSubField" placeholder="选填" />
+        </view>
+        <view class="form-field">
+          <view class="field-label">成品粗度</view>
+          <input class="input" value="{{form.drawingDetail.productRoughness}}" data-field="productRoughness" data-sub="drawingDetail" bindinput="bindSubField" placeholder="选填" />
+        </view>
+        <view class="form-field">
+          <view class="field-label">长度</view>
+          <input class="input" value="{{form.drawingDetail.length}}" data-field="length" data-sub="drawingDetail" bindinput="bindSubField" placeholder="选填" />
+        </view>
+        <view class="form-field">
+          <view class="field-label">顶孔螺纹</view>
+          <input class="input" value="{{form.drawingDetail.topHoleThread}}" data-field="topHoleThread" data-sub="drawingDetail" bindinput="bindSubField" placeholder="选填" />
+        </view>
+        <view class="form-field">
+          <view class="field-label">顶孔</view>
+          <input class="input" value="{{form.drawingDetail.topHole}}" data-field="topHole" data-sub="drawingDetail" bindinput="bindSubField" placeholder="选填" />
+        </view>
+        <view class="form-field">
+          <view class="field-label">横孔</view>
+          <input class="input" value="{{form.drawingDetail.crossHole}}" data-field="crossHole" data-sub="drawingDetail" bindinput="bindSubField" placeholder="选填" />
+        </view>
+        <view class="form-field">
+          <view class="field-label">方头</view>
+          <input class="input" value="{{form.drawingDetail.squareHead}}" data-field="squareHead" data-sub="drawingDetail" bindinput="bindSubField" placeholder="选填" />
+        </view>
+      </view>
+    </view>
+
+    <view style="margin-top: 16rpx;">
+      <view class="field-label">是否急要<text class="required">*</text></view>
+      <view class="btn-group">
+        <view class="btn-option {{form.urgent === true ? 'active' : ''}}" bindtap="setUrgent" data-value="true">是</view>
+        <view class="btn-option {{form.urgent === false ? 'active' : ''}}" bindtap="setUrgent" data-value="false">否</view>
+      </view>
+    </view>
+
+    <view style="margin-top: 24rpx;">
+      <view class="field-label">是否补单<text class="required">*</text></view>
+      <view class="btn-group">
+        <view class="btn-option {{form.isReorder === true ? 'active' : ''}}" bindtap="setIsReorder" data-value="true">是</view>
+        <view class="btn-option {{form.isReorder === false ? 'active' : ''}}" bindtap="setIsReorder" data-value="false">否</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="subtitle">工序配置</view>
+    <view class="step-selector">
+      <view class="step-group">
+        <view class="group-title">可选工序</view>
+        <view class="step-list">
+          <view wx:for="{{processList}}" wx:key="key" class="step-item">
+            <view class="step-info">
+              <view class="step-name">{{item.name}}</view>
+              <view class="step-station">{{item.station}}</view>
+            </view>
+            <button class="add-step-btn" bindtap="addStep" data-key="{{item.key}}">添加</button>
+          </view>
+        </view>
+      </view>
+
+      <view class="step-group">
+        <view class="group-title">已选工序（按执行顺序）<text class="required">*</text></view>
+        <view wx:if="{{selectedSteps.length === 0}}" class="empty-hint">暂无已选工序</view>
+        <view wx:else class="step-list">
+          <view wx:for="{{selectedSteps}}" wx:key="instanceId" class="step-item selected">
+            <view class="step-order">{{index + 1}}</view>
+            <view class="step-info">
+              <view class="step-name">{{item.name}}</view>
+              <view class="step-station">{{item.station}}</view>
+            </view>
+            <view class="step-controls">
+              <button class="step-delete-btn" bindtap="removeSelectedStep" data-instance-id="{{item.instanceId}}">删</button>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="form-bottom row">
+      <view class="urgent-status {{form.urgent ? 'active' : ''}}">
+        {{form.urgent ? '加急订单' : '普通订单'}}
+      </view>
+      <button class="primary-btn" bindtap="submit">创建工单</button>
+    </view>
+  </view>
+
+  <!-- 从已有工单读取弹窗 -->
+  <view wx:if="{{showCopyModal}}" class="modal-mask" bindtap="closeCopyModal">
+    <view class="modal-content copy-modal" catchtap="">
+      <view class="modal-title">选择已有工单</view>
+      <view class="copy-tip">选择后将自动填充基本信息，图纸和工序可自行调整</view>
+      <scroll-view scroll-y class="copy-list">
+        <block wx:for="{{copyOrders}}" wx:key="id">
+          <view class="copy-item" bindtap="loadFromOrder" data-id="{{item.id}}">
+            <view class="copy-order-id">{{item.id}}</view>
+            <view class="copy-info">
+              <text class="copy-customer">{{item.customerName}}</text>
+              <text class="copy-meta">{{item.type}} · {{item.material}}</text>
+            </view>
+            <view class="copy-arrow">›</view>
+          </view>
+        </block>
+        <view wx:if="{{copyOrders.length === 0}}" class="empty-hint">暂无可用工单</view>
+      </scroll-view>
+      <button class="modal-btn cancel" bindtap="closeCopyModal">取消</button>
+    </view>
+  </view>
+</view>
+
+<view wx:else class="container">
+  <view class="card empty-state">
+    <view class="title">无权限创建工单</view>
+    <view class="subtle">请切换到管理员或超级管理员账号。</view>
+    <button class="primary-btn" bindtap="goAdmin">前往管理中心</button>
+  </view>
+</view>

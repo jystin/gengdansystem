@@ -1,0 +1,41 @@
+<view class="container page-scan">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+  <view class="scan-card card">
+    <view class="title">扫码进入工单</view>
+    <view class="subtle">支持扫码枪、相机扫码，或手动输入工单号</view>
+
+    <view wx:if="{{currentUser.role === 'worker' && currentUser.status !== 'active'}}" class="pending-tip">
+      当前账号处于待审批状态，必须先由管理员在管理中心通过后才能进入系统。
+    </view>
+
+    <button class="scan-btn" bindtap="scanCode">开始扫码</button>
+
+    <view class="input-block">
+      <input class="scan-input" placeholder="输入工单号，例如 GD20260516001" value="{{orderId}}" bindinput="onOrderInput" />
+      <button class="confirm-btn" bindtap="openByInput">进入工单</button>
+    </view>
+  </view>
+
+  <view class="join-card card">
+    <view class="section-title">申请加入系统</view>
+    <view class="subtle">仅可使用管理员分享链接或二维码内的入驻码进入申请页，提交后进入待审批列表</view>
+    <view class="join-actions">
+      <button class="join-btn primary" bindtap="openJoinFromInput">用输入框中的入驻码打开申请页</button>
+    </view>
+  </view>
+
+  <view class="list card">
+    <view class="section-title">最近工单</view>
+    <block wx:for="{{quickOrders}}" wx:key="id">
+      <view class="quick-item" bindtap="openOrder" data-id="{{item.id}}">
+        <view class="row">
+          <text class="quick-id">{{item.id}}</text>
+          <text class="badge {{item.paused ? 'badge-warning' : item.status === 'completed' ? 'badge-success' : item.overdue ? 'badge-danger' : item.urgent ? 'badge-warning' : 'badge-info'}}">{{item.statusLabel}}</text>
+        </view>
+        <view class="subtle">{{item.customer}} · {{item.currentStepName}}</view>
+      </view>
+    </block>
+  </view>
+</view>

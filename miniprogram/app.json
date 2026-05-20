@@ -1,0 +1,22 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/material/index",
+    "pages/create-order/index",
+    "pages/orders/index",
+    "pages/scan/index",
+    "pages/join/index",
+    "pages/admin/index",
+    "pages/profile/index",
+    "pages/order-detail/index"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#0f172a",
+    "navigationBarTitleText": "兴祥机械跟单系统",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f5f7fb"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,216 @@
+<view class="container page-home">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+  <view class="hero card">
+    <view class="hero-top row">
+      <view>
+        <view class="hero-name">兴祥机械跟单中心</view>
+        <view class="hero-sub">订单流转 · 扫码完工 · 历史追溯</view>
+      </view>
+      <view class="hero-pill">{{dashboard.total || 0}} 张单</view>
+    </view>
+
+    <view class="hero-actions">
+      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn primary" bindtap="goCreateOrder">新建工单</button>
+      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn primary" bindtap="goMaterial">材料库存</button>
+      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn primary" bindtap="toggleEmpModal">员工管理</button>
+      <button class="action-btn primary" bindtap="goScan">扫码进单</button>
+      <button class="action-btn ghost" bindtap="goOrders">查看工单</button>
+      <button class="action-btn ghost" bindtap="goProfile">个人中心</button>
+    </view>
+  </view>
+
+  <view class="metrics">
+    <view class="metric card metric-urgent" bindtap="goOrdersByCategory" data-category="urgent">
+      <view class="metric-left">
+        <text class="metric-value">{{dashboard.urgent || 0}}</text>
+        <text class="metric-label">加急</text>
+      </view>
+      <text class="metric-arrow">›</text>
+    </view>
+    <view class="metric card metric-overdue" bindtap="goOrdersByCategory" data-category="overdue">
+      <view class="metric-left">
+        <text class="metric-value">{{dashboard.overdue || 0}}</text>
+        <text class="metric-label">逾期</text>
+      </view>
+      <text class="metric-arrow">›</text>
+    </view>
+    <view class="metric card metric-paused" bindtap="goOrdersByCategory" data-category="paused">
+      <view class="metric-left">
+        <text class="metric-value">{{dashboard.paused || 0}}</text>
+        <text class="metric-label">暂停</text>
+      </view>
+      <text class="metric-arrow">›</text>
+    </view>
+    <view class="metric card metric-completed" bindtap="goOrdersByCategory" data-category="completed">
+      <view class="metric-left">
+        <text class="metric-value">{{dashboard.completed || 0}}</text>
+        <text class="metric-label">已完成</text>
+      </view>
+      <text class="metric-arrow">›</text>
+    </view>
+    <view class="metric card metric-processing" bindtap="goOrdersByCategory" data-category="processing">
+      <view class="metric-left">
+        <text class="metric-value">{{dashboard.processing || 0}}</text>
+        <text class="metric-label">生产中</text>
+      </view>
+      <text class="metric-arrow">›</text>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-head row">
+      <text class="section-title">最近工单</text>
+      <text class="section-link" bindtap="goOrders">查看全部</text>
+    </view>
+
+    <block wx:for="{{orders}}" wx:key="id">
+      <view class="order-item {{item.urgent ? 'urgent' : ''}}" bindtap="openOrder" data-id="{{item.id}}">
+        <view class="row order-line">
+          <text class="order-id">{{item.id}}</text>
+          <text class="badge {{item.paused ? 'badge-warning' : item.status === 'completed' ? 'badge-success' : item.overdue ? 'badge-danger' : item.urgent ? 'badge-urgent' : 'badge-info'}}">{{item.statusLabel}}</text>
+        </view>
+        <view class="subtle">{{item.customerName}}</view>
+        <view class="order-meta">
+          <text>种类 {{item.type}}</text>
+          <text>尺寸 {{item.size}}</text>
+          <text>当前 {{item.currentStepName}}</text>
+        </view>
+      </view>
+    </block>
+  </view>
+
+  <view class="section card">
+    <view class="section-head row">
+      <text class="section-title">最近操作日志</text>
+    </view>
+
+    <block wx:for="{{logs}}" wx:key="id">
+      <view class="log-item">
+        <view class="row">
+          <text class="log-action">{{item.action}}</text>
+          <text class="subtle">{{item.at}}</text>
+        </view>
+        <view class="subtle">{{item.target}} · {{item.operator}}</view>
+      </view>
+    </block>
+  </view>
+
+  <!-- 员工管理弹窗 -->
+  <view wx:if="{{showEmpModal}}" class="emp-mask" bindtap="onEmpMaskTap">
+    <view class="emp-panel" catchtap="onEmpPanelTap">
+      <view class="emp-header">
+        <text class="emp-title">员工管理</text>
+        <text class="emp-close" bindtap="closeEmpModal">✕</text>
+      </view>
+
+      <!-- Tab 切换 -->
+      <view class="emp-tabs">
+        <view class="emp-tab {{empTab === 'list' ? 'active' : ''}}" data-tab="list" bindtap="switchEmpTab">员工列表</view>
+        <view class="emp-tab {{empTab === 'stats' ? 'active' : ''}}" data-tab="stats" bindtap="switchEmpTab">月度统计</view>
+      </view>
+
+      <!-- Tab 1：员工列表 + 岗位分配 -->
+      <view wx:if="{{empTab === 'list'}}" class="emp-tab-content">
+        <scroll-view scroll-y class="emp-list-scroll">
+          <block wx:for="{{empList}}" wx:key="id">
+            <view class="emp-card {{editingEmpId === item.id ? 'editing' : ''}}">
+              <view class="emp-card-top">
+                <view class="emp-card-info">
+                  <view class="emp-card-name">{{item.name}}</view>
+                  <view class="emp-card-role-badge {{item.role === 'superadmin' ? 'badge-superadmin' : item.role === 'admin' ? 'badge-admin' : item.status === 'pending' ? 'badge-pending' : 'badge-worker'}}">{{item.role === 'superadmin' ? '超管' : item.role === 'admin' ? '管理员' : item.status === 'pending' ? '待审' : '员工'}}</view>
+                </view>
+                <view wx:if="{{item.role !== 'superadmin'}}" class="emp-edit-btn" data-id="{{item.id}}" bindtap="toggleEmpEdit">{{editingEmpId === item.id ? '完成' : '编辑岗位'}}</view>
+              </view>
+
+              <!-- 岗位标签展示 -->
+              <view wx:if="{{editingEmpId !== item.id}}" class="emp-stations-display">
+                <block wx:for="{{item.stations}}" wx:for-item="st" wx:key="*this">
+                  <view class="emp-station-tag">{{st}}</view>
+                </block>
+                <view wx:if="{{!item.stations || item.stations.length === 0}}" class="emp-stations-empty">未分配岗位</view>
+              </view>
+
+              <!-- 岗位编辑模式（checkbox 多选） -->
+              <view wx:if="{{editingEmpId === item.id && item.role !== 'superadmin'}}" class="emp-stations-editor">
+                <view class="emp-stations-tip">勾选可分配给该员工的工序岗位：</view>
+                <view class="emp-checkbox-grid">
+                  <block wx:for="{{allStations}}" wx:for-item="opt" wx:key="station">
+                    <view class="emp-check-item {{opt.checked ? 'checked' : ''}}"
+                          data-empid="{{item.id}}" data-station="{{opt.station}}"
+                          bindtap="toggleEmpStationCheck">
+                      <view class="emp-check-box">{{opt.checked ? '✓' : ''}}</view>
+                      <view class="emp-check-label">{{opt.name}} ({{opt.station}})</view>
+                    </view>
+                  </block>
+                </view>
+                <view class="emp-save-row">
+                  <button class="emp-save-btn primary" data-id="{{item.id}}" bindtap="saveEmpStations">保存岗位</button>
+                </view>
+              </view>
+            </view>
+          </block>
+        </scroll-view>
+      </view>
+
+      <!-- Tab 2：月度统计 -->
+      <view wx:if="{{empTab === 'stats'}}" class="emp-tab-content">
+        <!-- 员工选择 + 导出按钮行 -->
+        <view class="prod-toolbar">
+          <picker mode="selector" range="{{prodEmployeeNames}}" value="{{selectedProdIndex}}" bindchange="onProdEmployeeChange">
+            <view class="prod-emp-picker">{{prodEmployeeNames[selectedProdIndex]}}</view>
+          </picker>
+          <view class="prod-export-btns">
+            <button class="prod-export-btn primary" bindtap="exportOneProduction">导出该员工</button>
+            <button class="prod-export-btn ghost" bindtap="exportAllProduction">导出全部</button>
+          </view>
+        </view>
+
+        <!-- 单员工月度表格 -->
+        <scroll-view scroll-x class="prod-scroll">
+          <view class="prod-table">
+            <view class="prod-row prod-head">
+              <view class="prod-cell name-cell">月份</view>
+              <view wx:for="{{monthHeaders}}" wx:key="key" class="prod-cell">{{item.label}}</view>
+              <view class="prod-cell total-cell">全年</view>
+            </view>
+            <view class="prod-row">
+              <view class="prod-cell name-cell bold">{{productionStats[selectedProdIndex].employee.name}}</view>
+              <block wx:for="{{productionStats[selectedProdIndex].monthlyRoots}}" wx:key="key">
+                <view class="prod-cell {{item.roots > 0 ? 'has-data' : ''}}">{{item.roots}}</view>
+              </block>
+              <view class="prod-cell total-cell bold">{{productionStats[selectedProdIndex].totalRoots}}</view>
+            </view>
+          </view>
+        </scroll-view>
+
+        <!-- 全部员工汇总表 -->
+        <view class="prod-all-section">
+          <view class="prod-subtitle">全部员工汇总</view>
+          <scroll-view scroll-x class="prod-scroll">
+            <view class="prod-table">
+              <view class="prod-row prod-head">
+                <view class="prod-cell name-cell">员工</view>
+                <view wx:for="{{monthHeaders}}" wx:key="key" class="prod-cell">{{item.label}}</view>
+                <view class="prod-cell total-cell">全年</view>
+              </view>
+              <block wx:for="{{productionStats}}" wx:key="id">
+                <view class="prod-row">
+                  <view class="prod-cell name-cell">
+                    <view class="prod-emp-name">{{item.employee.name}}</view>
+                    <view class="prod-station">{{item._stationDisplay}}</view>
+                  </view>
+                  <block wx:for="{{item.monthlyRoots}}" wx:key="key" wx:for-item="m">
+                    <view class="prod-cell {{m.roots > 0 ? 'has-data' : ''}}">{{m.roots}}</view>
+                  </block>
+                  <view class="prod-cell total-cell">{{item.totalRoots}}</view>
+                </view>
+              </block>
+            </view>
+          </scroll-view>
+        </view>
+      </view>
+    </view>
+  </view>
+</view>

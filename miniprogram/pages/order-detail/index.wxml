@@ -1,0 +1,258 @@
+<view wx:if="{{order}}" class="container page-order-detail">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+  <view class="summary card {{order.urgent ? 'urgent' : ''}}">
+    <view class="row">
+      <view>
+        <view class="title">{{order.id}}</view>
+        <view class="subtle">{{order.customerName}}</view>
+      </view>
+      <text class="badge {{order.paused ? 'badge-warning' : order.status === 'completed' ? 'badge-success' : order.overdue ? 'badge-danger' : order.urgent ? 'badge-urgent' : 'badge-info'}}">{{order.statusLabel}}</text>
+    </view>
+
+    <view class="summary-grid">
+      <view class="field-item"><text class="field-label">种类</text><text class="field-value">{{order.type}}</text></view>
+      <view class="field-item"><text class="field-label">尺寸</text><text class="field-value">{{order.size}}</text></view>
+      <view class="field-item"><text class="field-label">数量</text><text class="field-value">{{order.qty}}</text></view>
+      <view class="field-item"><text class="field-label">单号</text><text class="field-value">{{order.singleNo}}</text></view>
+      <view class="field-item"><text class="field-label">材质</text><text class="field-value">{{order.material}}</text></view>
+      <view class="field-item"><text class="field-label">进度</text><text class="field-value">{{order.progress}}%</text></view>
+      <view class="field-item"><text class="field-label">交期</text><text class="field-value">{{order.dueDate}}</text></view>
+      <view class="field-item"><text class="field-label">下单日期</text><text class="field-value">{{order.orderDate}}</text></view>
+      <view class="field-item" wx:if="{{order.completedDate}}"><text class="field-label">完成日期</text><text class="field-value">{{order.completedDate}}</text></view>
+    </view>
+
+    <view class="progress-block">
+      <view class="progress-bar">
+        <view class="progress-fill" style="width: {{order.progress}}%"></view>
+      </view>
+      <view class="subtle">当前工序：{{order.currentStepName}} · {{order.currentStation}}</view>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-title-row">
+      <text class="section-title">工序流转</text>
+      <button wx:if="{{!editingSteps && (currentUser.role === 'admin' || currentUser.role === 'superadmin')}}" class="edit-btn" bindtap="enterEditSteps">编辑工序</button>
+    </view>
+
+    <view wx:if="{{editingSteps}}" class="step-editor">
+      <view class="step-group">
+        <view class="group-title">可选工序</view>
+        <view class="step-list">
+          <view wx:for="{{processList}}" wx:key="key" class="step-item">
+            <view class="step-info">
+              <view class="step-name">{{item.name}}</view>
+              <view class="step-station">{{item.station}}</view>
+            </view>
+            <button class="add-step-btn" bindtap="addStep" data-key="{{item.key}}">添加</button>
+          </view>
+        </view>
+      </view>
+
+      <view class="step-group">
+        <view class="group-title">已选工序（按执行顺序）</view>
+        <view wx:if="{{selectedSteps.length === 0}}" class="empty-hint">暂无已选工序</view>
+        <view wx:else class="step-list">
+          <view wx:for="{{selectedSteps}}" wx:key="instanceId" class="step-item selected {{!item.canDelete ? 'locked' : ''}}">
+            <view class="step-order">{{index + 1}}</view>
+            <view class="step-info">
+              <view class="step-name">{{item.name}}</view>
+              <view class="step-station">{{item.station}}</view>
+            </view>
+            <view class="step-controls">
+              <button wx:if="{{item.canRevert}}" class="step-revert-btn" bindtap="revertStep" data-instance-id="{{item.instanceId}}">撤回</button>
+              <button wx:elif="{{item.canDelete}}" class="step-delete-btn" bindtap="removeSelectedStep" data-instance-id="{{item.instanceId}}">删</button>
+              <text wx:else class="locked-tag">已完成</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <view class="editor-actions">
+        <button class="primary-btn" bindtap="saveStepChanges">保存工序</button>
+        <button class="secondary-btn" bindtap="exitEditSteps">取消</button>
+      </view>
+    </view>
+
+    <block wx:else>
+      <block wx:for="{{order.steps}}" wx:key="key">
+        <view class="step-item {{index < order.currentStepIndex ? 'done' : index === order.currentStepIndex ? 'current' : ''}}">
+          <view class="step-dot"></view>
+          <view class="step-body">
+            <view class="row">
+              <text class="step-name">{{item.name}}</text>
+              <text class="subtle">{{item.station}}</text>
+            </view>
+            <view class="subtle" wx:if="{{index < order.history.length}}">{{order.history[index].operator}} - {{order.history[index].completedAt}}{{order.history[index].qty ? ' - ' + order.history[index].qty + '根' : ''}}</view>
+            <view class="subtle" wx:else>等待处理</view>
+          </view>
+        </view>
+      </block>
+    </block>
+  </view>
+
+  <view class="section card" wx:if="{{order.drawings && order.drawings.length > 0}}">
+    <view class="section-title">图纸附件（{{order.drawings.length}}张）</view>
+    <view class="drawing-grid">
+      <block wx:for="{{order.drawings}}" wx:key="name">
+        <image
+          class="drawing-thumb"
+          src="{{item.tempFilePath || ''}}"
+          mode="aspectFill"
+          data-urls="{{drawingUrls}}"
+          data-index="{{index}}"
+          bindtap="previewDrawing"
+        />
+      </block>
+    </view>
+  </view>
+
+  <view wx:if="{{order.drawingDetail && (order.drawingDetail.blankingRoughness || order.drawingDetail.productRoughness || order.drawingDetail.length || order.drawingDetail.topHoleThread || order.drawingDetail.topHole || order.drawingDetail.crossHole || order.drawingDetail.squareHead)}}" class="section card">
+    <view class="section-title">图纸细节</view>
+    <view class="detail-grid">
+      <view class="detail-item"><text class="detail-label">下单数量</text><text class="detail-sep">：</text><text class="detail-value highlight">{{order.qty}}</text></view>
+      <view wx:if="{{order.drawingDetail.blankingRoughness}}" class="detail-item"><text class="detail-label">下料粗度</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.blankingRoughness}}</text></view>
+      <view wx:if="{{order.drawingDetail.productRoughness}}" class="detail-item"><text class="detail-label">成品粗度</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.productRoughness}}</text></view>
+      <view wx:if="{{order.drawingDetail.length}}" class="detail-item"><text class="detail-label">长度</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.length}}</text></view>
+      <view wx:if="{{order.drawingDetail.topHoleThread}}" class="detail-item"><text class="detail-label">顶孔螺纹</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.topHoleThread}}</text></view>
+      <view wx:if="{{order.drawingDetail.topHole}}" class="detail-item"><text class="detail-label">顶孔</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.topHole}}</text></view>
+      <view wx:if="{{order.drawingDetail.crossHole}}" class="detail-item"><text class="detail-label">横孔</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.crossHole}}</text></view>
+      <view wx:if="{{order.drawingDetail.squareHead}}" class="detail-item full-width"><text class="detail-label">方头</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.squareHead}}</text></view>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">订单二维码</view>
+    <view class="subtle">二维码内容绑定工单号：{{order.qrContent || order.id}}</view>
+    <view class="qr-wrap">
+      <image class="qr-image" src="{{order.qrUrl}}" mode="widthFix" />
+    </view>
+    <view class="subtle qr-note">员工扫码后可直接进入该订单详情，随后按权限点击已完成并流转。</view>
+  </view>
+
+  <view class="section card action-panel">
+    <view class="section-title">操作面板</view>
+    <view wx:if="{{canComplete}}" class="subtle admin-tip">{{isAdmin ? '管理员可直接点击已完成，系统会自动流转到下一工序。' : '当前工序已分配给您，请确认完成后点击流转。'}}</view>
+    <view wx:elif="{{order.status !== 'completed'}}" class="subtle no-permission-tip">您无权操作当前工序，请等待{{order.currentStation}}处理。</view>
+
+    <view wx:if="{{canComplete}}">
+      <!-- 操作员选择（所有工序都需要） -->
+      <view class="form-field">
+        <view class="form-label">工序操作员<text class="required-star">*</text></view>
+        <view class="operator-select" bindtap="showOperatorPicker">
+          <text class="{{operatorId ? '' : 'placeholder'}}">{{operatorLabel}}</text>
+          <text class="select-arrow">▾</text>
+        </view>
+      </view>
+
+      <!-- 下料工序：需要填写材料消耗 -->
+      <view wx:if="{{isBlankingStep}}">
+        <view class="material-tip">下料工序请填写材料消耗，系统将自动扣减库存</view>
+
+        <view class="form-field">
+          <view class="form-label">材料类型<text class="required-star">*</text></view>
+          <picker mode="selector" range="{{materialTypes}}" bindchange="bindMaterialType">
+            <view class="input picker-input {{materialConsumption.material ? '' : 'placeholder'}}">
+              {{materialConsumption.material || '请选择材料'}}
+            </view>
+          </picker>
+        </view>
+
+        <view class="form-field">
+          <view class="form-label">粗度（mm）<text class="required-star">*</text></view>
+          <input class="form-input" type="digit" placeholder="0-200，如 80" value="{{materialConsumption.roughness}}" bindinput="bindMaterialRoughness" confirm-type="done" />
+        </view>
+
+        <view class="form-field">
+          <view class="form-label">长度（mm）<text class="required-star">*</text></view>
+          <input class="form-input" type="digit" placeholder="如 120，图纸有值则自动填充" value="{{materialConsumption.length}}" bindinput="bindMaterialLength" confirm-type="done" />
+        </view>
+
+        <view wx:if="{{calcWeightInfo && isAdmin}}" class="calc-weight-card">
+          <view class="calc-weight-title">材料消耗量计算</view>
+          <view class="calc-weight-row"><text class="calc-label">粗度系数</text><text class="calc-value">{{calcWeightInfo.coef}} kg/m</text></view>
+          <view class="calc-weight-row"><text class="calc-label">单根重量</text><text class="calc-value highlight">{{calcWeightInfo.singleWeightKg}} kg</text></view>
+          <view class="calc-weight-row"><text class="calc-label">总消耗量</text><text class="calc-value highlight strong">{{calcWeightInfo.totalTons}} 吨</text></view>
+          <view class="calc-divider"></view>
+          <view class="calc-weight-row"><text class="calc-label">当前库存</text><text class="calc-value">{{calcWeightInfo.currentStock}} 吨</text></view>
+          <view class="calc-weight-row"><text class="calc-label">剩余库存</text><text class="calc-value {{Number(calcWeightInfo.remainStock) >= 0 ? 'highlight' : 'danger'}} strong">{{calcWeightInfo.remainStock}} 吨</text></view>
+        </view>
+
+        <view class="form-field">
+          <view class="form-label">消耗数量（根）<text class="required-star">*</text></view>
+          <input class="form-input" type="number" placeholder="请输入本次消耗数量" value="{{materialConsumption.qty}}" bindinput="bindMaterialQty" confirm-type="done" />
+        </view>
+
+        <view class="form-field">
+          <view class="form-label">备注 / 异常说明</view>
+          <textarea class="form-textarea" placeholder="选填" value="{{note}}" bindinput="onNoteInput" bindblur="onNoteBlur" auto-height maxlength="200" />
+        </view>
+      </view>
+
+      <!-- 其他工序 -->
+      <view wx:else>
+        <view class="form-field">
+          <view class="form-label"><text class="required-star">*</text> 实际处理根数</view>
+          <input class="form-input" type="digit" placeholder="请输入实际处理根数" value="{{completedQty}}" bindinput="onQtyInput" bindblur="onQtyBlur" confirm-type="done" cursor-spacing="20" />
+        </view>
+
+        <view class="form-field">
+          <view class="form-label">备注 / 异常说明</view>
+          <textarea class="form-textarea" placeholder="选填" value="{{note}}" bindinput="onNoteInput" bindblur="onNoteBlur" auto-height maxlength="200" />
+        </view>
+      </view>
+    </view>
+
+    <view class="action-row">
+      <button class="primary-btn" bindtap="completeStep" disabled="{{!canComplete || order.status === 'completed'}}">已完成并流转</button>
+      <button wx:if="{{isAdmin && order.status !== 'completed'}}" class="secondary-btn {{order.urgent ? 'urgent-btn' : ''}}" bindtap="toggleUrgent">{{order.urgent ? '取消加急' : '设为加急'}}</button>
+      <button wx:if="{{isAdmin && order.status !== 'completed'}}" class="secondary-btn" bindtap="togglePause">{{order.paused ? '恢复工单' : '暂停工单'}}</button>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">全流程记录</view>
+    <block wx:for="{{order.history}}" wx:key="completedAt">
+      <view class="history-item">
+        <view class="row">
+          <text class="history-name">{{item.stepName}}</text>
+          <text class="subtle">{{item.completedAt}}</text>
+        </view>
+        <view class="subtle">{{item.operator}} · {{item.role}}{{item.qty ? ' · 实际 ' + item.qty + ' 根' : ''}}{{item.note ? ' · ' + item.note : ''}}</view>
+      </view>
+    </block>
+  </view>
+</view>
+
+<view wx:else class="container">
+  <view class="card empty-state">
+    <view class="title">未找到工单</view>
+    <view class="subtle">请返回列表或通过扫码进入。</view>
+  </view>
+</view>
+
+<!-- 操作员选择弹窗 -->
+<view wx:if="{{showOperatorPicker}}" class="op-picker-mask" bindtap="hideOperatorPicker">
+  <view class="op-picker-panel" catchtap="onOperatorPanelTap">
+    <view class="op-picker-header">
+      <text class="op-picker-title">选择操作员</text>
+      <text class="op-picker-close" bindtap="hideOperatorPicker">✕</text>
+    </view>
+    <input class="op-search-input" placeholder="搜索姓名或岗位..." value="{{operatorSearchKeyword}}" bindinput="onOperatorSearchInput" confirm-type="search" focus />
+    <scroll-view scroll-y class="op-employee-list">
+      <block wx:for="{{activeEmployees}}" wx:key="id">
+        <view wx:if="{{!operatorSearchKeyword || item.name.indexOf(operatorSearchKeyword) !== -1 || (item._stationDisplay && item._stationDisplay.indexOf(operatorSearchKeyword) !== -1)}}"
+              class="op-employee-item {{operatorId === item.id ? 'selected' : ''}}"
+              data-id="{{item.id}}"
+              bindtap="selectOperator">
+          <view class="op-emp-name">{{item.name}}</view>
+          <view class="op-emp-station">{{item._stationDisplay}}</view>
+          <text wx:if="{{operatorId === item.id}}" class="op-check-icon">✓</text>
+        </view>
+      </block>
+      <view wx:if="{{activeEmployees.length === 0}}" class="op-empty">暂无可选员工</view>
+    </scroll-view>
+  </view>
+</view>

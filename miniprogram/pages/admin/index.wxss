@@ -1,0 +1,363 @@
+.page-admin {
+  padding-bottom: 40rpx;
+}
+
+.hero,
+.section {
+  padding: 28rpx;
+}
+
+.hero {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  color: #ffffff;
+}
+
+.hero .title,
+.hero .subtle {
+  color: #ffffff;
+}
+
+.hero-actions {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 24rpx;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  flex: 1;
+  min-width: 180rpx;
+  border-radius: 18rpx;
+  line-height: 2.4;
+  font-size: 26rpx;
+}
+
+.action-btn.primary {
+  background: #f59e0b;
+  color: #ffffff;
+}
+
+.action-btn.ghost {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12rpx;
+  margin-top: 20rpx;
+}
+
+.metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16rpx 16rpx;
+  border-radius: 14rpx;
+  background: #ffffff;
+  border-left: 5rpx solid #e2e8f0;
+  box-shadow: 0 1rpx 8rpx rgba(0, 0, 0, 0.05), 0 1rpx 2rpx rgba(0, 0, 0, 0.03);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.metric::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, transparent 60%, rgba(0, 0, 0, 0.012) 100%);
+  pointer-events: none;
+}
+
+.metric:active {
+  transform: scale(0.97);
+  box-shadow: 0 1rpx 4rpx rgba(0, 0, 0, 0.06);
+}
+
+.metric-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.metric-value {
+  font-size: 32rpx;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.5rpx;
+}
+
+.metric-label {
+  margin-top: 4rpx;
+  font-size: 20rpx;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.metric-arrow {
+  font-size: 28rpx;
+  color: #cbd5e1;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-left: 6rpx;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.metric:active .metric-arrow {
+  transform: translateX(2rpx);
+  color: #94a3b8;
+}
+
+/* 工单总数 - 靛蓝 */
+.metric-all {
+  border-left-color: #6366f1;
+  background: linear-gradient(135deg, #eef2ff 0%, #ffffff 100%);
+}
+.metric-all .metric-value { color: #4f46e5; }
+.metric-all:active { background: #e0e7ff; }
+
+/* 加急 - 红色 */
+.metric-urgent {
+  border-left-color: #ef4444;
+  background: linear-gradient(135deg, #fffafa 0%, #ffffff 100%);
+}
+.metric-urgent .metric-value { color: #dc2626; }
+.metric-urgent:active { background: #fef2f2; }
+
+/* 逾期 - 橙色 */
+.metric-overdue {
+  border-left-color: #f97316;
+  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
+}
+.metric-overdue .metric-value { color: #ea580c; }
+.metric-overdue:active { background: #ffedd5; }
+
+/* 暂停 - 琥珀 */
+.metric-paused {
+  border-left-color: #f59e0b;
+  background: linear-gradient(135deg, #fffbeb 0%, #ffffff 100%);
+}
+.metric-paused .metric-value { color: #d97706; }
+.metric-paused:active { background: #fef3c7; }
+
+/* 已完成 - 绿色 */
+.metric-completed {
+  border-left-color: #22c55e;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%);
+}
+.metric-completed .metric-value { color: #16a34a; }
+.metric-completed:active { background: #dcfce7; }
+
+/* 生产中 - 青色 */
+.metric-processing {
+  border-left-color: #0ea5a9;
+  background: linear-gradient(135deg, #f0fdfa 0%, #ffffff 100%);
+}
+.metric-processing .metric-value { color: #0d9488; }
+.metric-processing:active { background: #ccfbf1; }
+
+.section {
+  margin-top: 24rpx;
+}
+
+.invite-box {
+  padding: 20rpx;
+  border-radius: 18rpx;
+  background: #f8fafc;
+}
+
+.invite-code {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: 1rpx;
+}
+
+.production-scroll {
+  width: 100%;
+  overflow: auto;
+}
+
+.production-table {
+  min-width: 860rpx;
+}
+
+.production-row {
+  display: grid;
+  grid-template-columns: 220rpx repeat(12, 1fr) 80rpx;
+  gap: 8rpx;
+  align-items: stretch;
+  padding: 12rpx 0;
+  border-top: 1rpx solid #e2e8f0;
+}
+
+.production-head {
+  font-weight: 700;
+  border-top: none;
+  padding-top: 0;
+}
+
+.production-cell {
+  padding: 12rpx 10rpx;
+  border-radius: 14rpx;
+  background: #f8fafc;
+  font-size: 24rpx;
+  text-align: center;
+}
+
+.name-cell {
+  text-align: left;
+}
+
+.total-cell {
+  font-weight: 700;
+}
+
+.prod-name {
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.section-head {
+  margin-bottom: 18rpx;
+}
+
+.collapsible-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.collapse-arrow {
+  font-size: 36rpx;
+  color: #94a3b8;
+  line-height: 1;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+  margin-top: 4rpx;
+}
+
+.collapse-arrow.open {
+  transform: rotate(90deg);
+}
+
+.section-title {
+  font-size: 30rpx;
+  font-weight: 700;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16rpx;
+}
+
+.input,
+.textarea,
+.picker {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 18rpx;
+  background: #f8fafc;
+  padding: 18rpx 20rpx;
+  font-size: 26rpx;
+}
+
+.textarea {
+  min-height: 140rpx;
+  margin-top: 16rpx;
+}
+
+.picker {
+  margin-top: 16rpx;
+}
+
+.form-bottom {
+  margin-top: 16rpx;
+  gap: 16rpx;
+  align-items: center;
+}
+
+.checkbox-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  font-size: 24rpx;
+}
+
+.primary-btn {
+  min-width: 180rpx;
+  border-radius: 18rpx;
+  line-height: 2.4;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 26rpx;
+}
+
+.person-card,
+.log-item {
+  padding: 20rpx 0;
+  border-top: 1rpx solid #e2e8f0;
+}
+
+.person-card:first-child,
+.log-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.person-name,
+.log-action {
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.card-actions {
+  display: flex;
+  gap: 12rpx;
+  flex-wrap: wrap;
+  margin-top: 14rpx;
+}
+
+.mini-btn {
+  border-radius: 16rpx;
+  line-height: 2.1;
+  font-size: 22rpx;
+  padding: 0 18rpx;
+}
+
+.mini-btn.success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #166534;
+}
+
+.mini-btn.ghost {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.mini-btn.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #991b1b;
+}
+
+.empty-state {
+  margin-top: 24rpx;
+  padding: 28rpx;
+}
+
+@media (max-width: 720px) {
+  .form-grid,
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .production-row {
+    grid-template-columns: 180rpx repeat(12, 1fr) 80rpx;
+  }
+}

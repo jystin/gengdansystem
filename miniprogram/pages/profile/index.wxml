@@ -1,0 +1,108 @@
+<view class="container page-profile">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+  <view class="profile-card card">
+    <view class="row">
+      <view>
+        <view class="title">{{user.name}}</view>
+        <view class="subtle">{{user.role === 'superadmin' ? '超级管理员' : user.role === 'admin' ? '管理员' : '操作工'}} · {{user.stations ? user.stations.join('、') : (user.station || '')}}</view>
+      </view>
+      <text class="badge badge-info">{{user.role === 'superadmin' ? '超管' : user.role === 'admin' ? '管理' : '员工'}}</text>
+    </view>
+
+    <view class="switch-block">
+      <text class="switch-label">切换演示身份</text>
+      <picker mode="selector" range="{{employees}}" range-key="name" bindchange="switchUser">
+        <view class="switch-picker">当前：{{user.name}}</view>
+      </picker>
+    </view>
+
+    <view class="profile-stats" wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}">
+      <view class="stat-item">
+        <text class="stat-value">{{dashboard.pendingEmployees || 0}}</text>
+        <text class="stat-label">待审批</text>
+      </view>
+      <view class="stat-item">
+        <text class="stat-value">{{dashboard.paused || 0}}</text>
+        <text class="stat-label">暂停中</text>
+      </view>
+      <view class="stat-item">
+        <text class="stat-value">{{dashboard.overdue || 0}}</text>
+        <text class="stat-label">逾期</text>
+      </view>
+    </view>
+
+    <view class="profile-stats" wx:else>
+      <view class="stat-item">
+        <text class="stat-value">{{monthlyStats.totalRoots || 0}}</text>
+        <text class="stat-label">本年完成</text>
+      </view>
+      <view class="stat-item">
+        <text class="stat-value">{{monthlyStats.currentMonthRoots || 0}}</text>
+        <text class="stat-label">本月完成</text>
+      </view>
+      <view class="stat-item">
+        <text class="stat-value">{{dashboard.completed || 0}}</text>
+        <text class="stat-label">已完成工单</text>
+      </view>
+    </view>
+
+    <view class="monthly-summary card-mini">
+      <view class="row">
+        <view>
+          <view class="mini-title">本年计件统计</view>
+          <view class="subtle">当前月：{{monthlyStats.currentMonthRoots || 0}} 根</view>
+        </view>
+        <text class="mini-total">{{monthlyStats.totalRoots || 0}} 根</text>
+      </view>
+    </view>
+
+    <view class="profile-actions">
+      <button class="action-btn primary" bindtap="goScan">扫码进单</button>
+      <button class="action-btn ghost" bindtap="goOrders">查看工单</button>
+    </view>
+
+    <view wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="profile-actions">
+      <button class="action-btn admin-btn" bindtap="goAdmin">进入管理中心</button>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">{{monthlyStats.year}} 月度根数</view>
+    <view class="month-grid">
+      <block wx:for="{{monthlyStats.monthlyRoots}}" wx:key="key">
+        <view class="month-card">
+          <text class="month-label">{{item.label}}</text>
+          <text class="month-value">{{item.roots}} 根</text>
+        </view>
+      </block>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">岗位绑定员工（{{employees.length}}人）</view>
+    <block wx:for="{{employees}}" wx:key="id">
+      <view class="employee-item">
+        <view class="row">
+          <text class="employee-name">{{item.name}}</text>
+          <text class="badge badge-success">已启用</text>
+        </view>
+        <view class="subtle">{{item.stations ? item.stations.join('、') : item.station}} · {{item.role === 'superadmin' ? '超级管理员' : item.role === 'admin' ? '管理员' : '员工'}}</view>
+      </view>
+    </block>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">最近日志</view>
+    <block wx:for="{{logs}}" wx:key="id">
+      <view class="log-item">
+        <view class="row">
+          <text class="log-action">{{item.action}}</text>
+          <text class="subtle">{{item.at}}</text>
+        </view>
+        <view class="subtle">{{item.target}} · {{item.operator}}</view>
+      </view>
+    </block>
+  </view>
+</view>

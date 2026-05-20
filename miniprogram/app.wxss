@@ -1,0 +1,101 @@
+.top-left-home {
+  position: fixed;
+  left: 18rpx;
+  top: 18rpx;
+  width: 64rpx;
+  height: 64rpx;
+  background: rgba(255,255,255,0.06);
+  border-radius: 50rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  box-shadow: 0 4rpx 12rpx rgba(0,0,0,0.15);
+}
+.top-left-home .home-icon {
+  font-size: 30rpx;
+  color: #ffffff;
+  line-height: 1;
+}
+page {
+  background: #f5f7fb;
+  color: #0f172a;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.container {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 32rpx;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 24rpx;
+  box-shadow: 0 10rpx 30rpx rgba(15, 23, 42, 0.08);
+}
+
+.title {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.subtle {
+  color: #64748b;
+  font-size: 24rpx;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 8rpx 16rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  font-weight: 600;
+}
+
+.badge-success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #166534;
+}
+
+.badge-warning {
+  background: rgba(245, 158, 11, 0.14);
+  color: #92400e;
+}
+
+.badge-danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #991b1b;
+}
+
+.badge-info {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
+.badge-urgent {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+/* 小程序 button 默认样式重置 */
+button {
+  margin: 0;
+  padding: 0;
+  line-height: inherit;
+  background: transparent;
+  border: none;
+  font-size: inherit;
+}
+
+button::after {
+  border: none;
+}

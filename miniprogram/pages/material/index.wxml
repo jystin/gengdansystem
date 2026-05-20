@@ -1,0 +1,210 @@
+<view class="container page-material" wx:if="{{currentUser}}">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+  <view class="hero card">
+    <view class="row">
+      <view>
+        <view class="title">材料库存管理</view>
+        <view class="subtle">实时监控厂内材料存量，所有操作自动记录</view>
+      </view>
+      <text class="badge badge-info">{{currentUser.role === 'superadmin' ? '超管' : currentUser.role === 'admin' ? '管理' : '员工'}}</text>
+    </view>
+    <view class="hero-actions">
+      <button class="action-btn ghost" bindtap="goHome">返回首页</button>
+      <button wx:if="{{isAdmin}}" class="action-btn primary" bindtap="openAddMaterialModal">+ 新增材料</button>
+    </view>
+  </view>
+
+  <!-- 库存概览 -->
+  <view class="summary-row">
+    <view class="summary-card">
+      <view class="summary-value">{{totalStock}}</view>
+      <view class="summary-label">总库存(吨)</view>
+    </view>
+    <view class="summary-card">
+      <view class="summary-value">{{materialTypes}}</view>
+      <view class="summary-label">材料种类</view>
+    </view>
+    <view class="summary-card {{lowCount > 0 ? 'warn' : ''}}">
+      <view class="summary-value">{{lowCount}}</view>
+      <view class="summary-label">库存不足</view>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">库存明细</view>
+    <view class="material-grid">
+      <view wx:for="{{inventory}}" wx:key="name" class="material-card {{item.hasLowRoughness ? 'low-stock' : ''}}">
+        <view class="card-header">
+          <view class="material-name">{{item.name}}</view>
+          <view wx:if="{{item.hasLowRoughness}}" class="tag-low">不足</view>
+          <view wx:else class="tag-ok">正常</view>
+        </view>
+        <view class="stock-main">
+          <text class="stock-num {{item.hasLowRoughness ? 'stock-red' : ''}}">{{item.stock}}</text>
+          <text class="unit">吨</text>
+        </view>
+
+        <!-- 粗度明细 -->
+        <view wx:if="{{item.detail.length > 0}}" class="roughness-section">
+          <view class="roughness-label">粗度明细（mm）</view>
+          <block wx:for="{{item.detail}}" wx:key="roughness" wx:for-item="rd" wx:for-index="ri">
+            <view class="roughness-row {{rd.isLow ? 'rd-low' : ''}}">
+              <view class="roughness-info">
+                <text class="roughness-val">φ{{rd.roughness}}</text>
+                <text class="roughness-stock {{rd.isLow ? 'stock-red' : ''}}">{{rd.stock}} 吨</text>
+                <view wx:if="{{rd.isLow}}" class="rd-tag-low">不足</view>
+              </view>
+            </view>
+          </block>
+        </view>
+        <view wx:else class="roughness-empty">暂无库存记录</view>
+
+        <view class="stock-bar-wrap">
+          <view class="stock-bar-bg">
+            <view class="stock-bar-fill" style="width: {{item.stock > 0 ? Math.min(item.stock / 20 * 100, 100) : 0}}%"></view>
+          </view>
+        </view>
+        <view wx:if="{{isAdmin}}" class="card-actions">
+          <button class="inbound-btn" bindtap="openInboundModal" data-material="{{item.name}}">入库</button>
+          <button class="outbound-btn" bindtap="openOutboundModal" data-material="{{item.name}}">出库</button>
+          <button class="setstock-btn" bindtap="openSetStockModal" data-material="{{item.name}}">设置</button>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-head">
+      <view>
+        <view class="section-title">操作记录</view>
+        <view class="subtle">全部 {{logs.length}} 条记录</view>
+      </view>
+    </view>
+    <block wx:for="{{logs}}" wx:key="id">
+      <view class="log-item">
+        <view class="row">
+          <view class="log-left">
+            <text class="log-badge {{item.type === 'in' ? 'in' : item.type === 'out' ? 'out' : 'set'}}">{{item.type === 'in' ? '入库' : item.type === 'out' ? '出库' : '设置'}}</text>
+            <text class="log-material">{{item.material}}{{item.roughness ? ' φ' + item.roughness : ''}}</text>
+          </view>
+          <text class="log-qty {{item.type === 'in' ? 'qty-in' : item.type === 'out' ? 'qty-out' : 'qty-set'}}">{{item.type === 'set' ? '→ ' + item.qty + ' 吨' : (item.type === 'in' ? '+' : '-') + item.qty + ' 吨'}}</text>
+        </view>
+        <view class="subtle log-meta">{{item.note || (item.type === 'in' ? '入库' : item.type === 'out' ? '出库' : '设置库存')}}</view>
+        <view class="subtle log-time">{{item.at}} · {{item.operator}}</view>
+      </view>
+    </block>
+  </view>
+</view>
+
+<view wx:else class="container">
+  <view class="card empty-state">
+    <view class="title">请先登录</view>
+    <view class="subtle">切换到员工账号后访问。</view>
+  </view>
+</view>
+
+<!-- 入库弹窗 -->
+<view wx:if="{{showInboundModal}}" class="modal-mask" catchtap="closeInboundModal">
+  <view class="modal-box" catchtap="preventClose">
+    <view class="modal-title">材料入库</view>
+    <view class="modal-material">{{inboundForm.material}}</view>
+
+    <view class="form-field">
+      <view class="form-label">粗度（mm）<text class="required">*</text></view>
+      <input class="input" type="digit" placeholder="0-200，如 80" value="{{inboundForm.roughness}}" bindinput="bindInboundRoughness" />
+    </view>
+
+    <view class="form-field">
+      <view class="form-label">入库数量（吨）<text class="required">*</text></view>
+      <input class="input" type="digit" placeholder="请输入入库数量" value="{{inboundForm.qty}}" bindinput="bindInboundQty" />
+    </view>
+
+    <view class="form-field">
+      <view class="form-label">备注</view>
+      <input class="input" placeholder="选填，如供应商、批次等" value="{{inboundForm.note}}" bindinput="bindInboundNote" />
+    </view>
+
+    <view class="modal-actions">
+      <button class="secondary-btn" catchtap="closeInboundModal">取消</button>
+      <button class="primary-btn" catchtap="submitInbound">确认入库</button>
+    </view>
+  </view>
+</view>
+
+<!-- 出库弹窗 -->
+<view wx:if="{{showOutboundModal}}" class="modal-mask" catchtap="closeOutboundModal">
+  <view class="modal-box" catchtap="preventClose">
+    <view class="modal-title" style="color:#dc2626;">材料出库</view>
+    <view class="modal-material">{{outboundForm.material}}</view>
+
+    <view class="form-field">
+      <view class="form-label">粗度（mm）<text class="required">*</text></view>
+      <input class="input" type="digit" placeholder="0-200，如 80" value="{{outboundForm.roughness}}" bindinput="bindOutboundRoughness" />
+    </view>
+
+    <view class="form-field">
+      <view class="form-label">出库数量（吨）<text class="required">*</text></view>
+      <input class="input" type="digit" placeholder="请输入出库数量" value="{{outboundForm.qty}}" bindinput="bindOutboundQty" />
+    </view>
+
+    <view class="form-field">
+      <view class="form-label">备注</view>
+      <input class="input" placeholder="选填，如客户名称、用途等" value="{{outboundForm.note}}" bindinput="bindOutboundNote" />
+    </view>
+
+    <view class="modal-actions">
+      <button class="secondary-btn" catchtap="closeOutboundModal">取消</button>
+      <button class="primary-btn outbound-confirm" catchtap="submitOutbound">确认出库</button>
+    </view>
+  </view>
+</view>
+
+<!-- 设置库存弹窗 -->
+<view wx:if="{{showSetStockModal}}" class="modal-mask" catchtap="closeSetStockModal">
+  <view class="modal-box" catchtap="preventClose">
+    <view class="modal-title">设置库存</view>
+    <view class="modal-material">{{setStockForm.material}}</view>
+
+    <view class="form-field">
+      <view class="form-label">粗度（mm）<text class="required">*</text></view>
+      <input class="input" type="digit" placeholder="0-200，如 80" value="{{setStockForm.roughness}}" bindinput="bindSetStockRoughness" />
+    </view>
+
+    <view class="form-field">
+      <view class="form-label">设置数量（吨）<text class="required">*</text></view>
+      <input class="input" type="digit" placeholder="将覆盖该粗度的现有库存" value="{{setStockForm.stock}}" bindinput="bindSetStockValue" />
+      <view class="form-hint">将直接覆盖该材料对应粗度的库存值</view>
+    </view>
+
+    <view class="form-field">
+      <view class="form-label">备注</view>
+      <input class="input" placeholder="选填，如修正原因等" value="{{setStockForm.note}}" bindinput="bindSetStockNote" />
+    </view>
+
+    <view class="modal-actions">
+      <button class="secondary-btn" catchtap="closeSetStockModal">取消</button>
+      <button class="primary-btn warn" catchtap="submitSetStock">确认设置</button>
+    </view>
+  </view>
+</view>
+
+<!-- 新增材料弹窗 -->
+<view wx:if="{{showAddMaterialModal}}" class="modal-mask" catchtap="closeAddMaterialModal">
+  <view class="modal-box" catchtap="preventClose">
+    <view class="modal-title">新增材料种类</view>
+    <view class="subtle" style="text-align:center;margin-bottom:32rpx;">添加后将在下料工序的材料选择中可用</view>
+
+    <view class="form-field">
+      <view class="form-label">材料名称<text class="required">*</text></view>
+      <input class="input" placeholder="如：碳钢、铝合金、铬钼钢等" value="{{addMaterialName}}" bindinput="bindAddMaterialName" />
+      <view class="form-hint">请输入准确的材料名称，添加后不可重命名</view>
+    </view>
+
+    <view class="modal-actions">
+      <button class="secondary-btn" catchtap="closeAddMaterialModal">取消</button>
+      <button class="primary-btn" catchtap="submitAddMaterial">确认添加</button>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,94 @@
+.page-join {
+  padding-bottom: 40rpx;
+}
+
+.hero,
+.section {
+  padding: 28rpx;
+}
+
+.hero {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  color: #ffffff;
+}
+
+.hero .title,
+.hero .subtle {
+  color: #ffffff;
+}
+
+.invite-code {
+  margin-top: 18rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 16rpx;
+  background: rgba(255, 255, 255, 0.14);
+  font-size: 26rpx;
+  word-break: break-all;
+}
+
+.section {
+  margin-top: 24rpx;
+}
+
+.subtitle {
+  font-size: 28rpx;
+  font-weight: 700;
+  margin-bottom: 20rpx;
+  color: #1e293b;
+}
+
+.form-field {
+  margin-bottom: 20rpx;
+}
+
+.field-label {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 10rpx;
+  display: block;
+}
+
+.required {
+  color: #e53935;
+  margin-left: 4rpx;
+}
+
+.form-input {
+  width: 100%;
+  height: 80rpx;
+  padding: 0 24rpx;
+  border: 2rpx solid #e2e8f0;
+  border-radius: 12rpx;
+  background: #ffffff;
+  font-size: 28rpx;
+  color: #1e293b;
+  box-sizing: border-box;
+}
+
+.form-textarea {
+  width: 100%;
+  min-height: 160rpx;
+  padding: 20rpx 24rpx;
+  border: 2rpx solid #e2e8f0;
+  border-radius: 12rpx;
+  background: #ffffff;
+  font-size: 26rpx;
+  color: #1e293b;
+  box-sizing: border-box;
+}
+
+.actions {
+  margin-top: 28rpx;
+}
+
+.primary-btn {
+  width: 100%;
+  height: 88rpx;
+  line-height: 88rpx;
+  border-radius: 18rpx;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 30rpx;
+  font-weight: 600;
+}

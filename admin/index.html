@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>兴祥机械跟单后台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Admin Console</p>
+          <h1>兴祥机械跟单后台</h1>
+          <p class="hero-copy">工序配置、员工审批、订单追踪、异常预警统一在这里处理。</p>
+        </div>
+        <div class="hero-actions">
+          <button class="btn btn-primary">新建流转单</button>
+          <button class="btn btn-ghost">导出报表</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="panel metrics" id="metrics"></section>
+
+        <section class="grid-two">
+          <article class="panel">
+            <div class="section-head">
+              <h2>进行中工单</h2>
+              <span>按交期 / 状态 / 加急优先级排序</span>
+            </div>
+            <div id="orders" class="order-list"></div>
+          </article>
+
+          <article class="panel">
+            <div class="section-head">
+              <h2>待审批员工</h2>
+              <span>管理员审核后才能进入车间</span>
+            </div>
+            <div id="employees" class="employee-list"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>二维码批量管理</h2>
+            <span>每张工单都绑定工单号二维码，可直接随单打印</span>
+            <button class="btn btn-ghost" onclick="window.printDashboard()">打印当前页</button>
+          </div>
+          <div id="qrs" class="qr-grid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>操作日志</h2>
+            <span>所有关键操作留痕，便于追责和回溯</span>
+          </div>
+          <div id="logs" class="log-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
