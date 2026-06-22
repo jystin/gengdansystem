@@ -1,4 +1,5 @@
-const { createOrder, getProcessLibrary, listOrders } = require('../../utils/mock-store')
+const api = require('../../utils/api')
+const ui = require('../../utils/ui')
 
 function emptyForm() {
   return {
@@ -36,45 +37,45 @@ Page({
     copyOrders: []
   },
 
-  onLoad() {
-    this._init()
+  async onLoad() {
+    await this._init()
   },
 
-  _init() {
+  async _init() {
     const app = getApp()
-    if (!app.requireActiveAccess('/pages/scan/index')) {
-      return
-    }
+    await app.waitForAccessReady()
+    if (!app.requireActiveAccess('/pages/scan/index')) return
     const currentUser = app.globalData.currentUser
     if (currentUser.role !== 'admin' && currentUser.role !== 'superadmin') {
-      wx.showToast({ title: '只有管理员可创建工单', icon: 'none' })
+      ui.toast('只有管理员可创建工单')
       wx.redirectTo({ url: '/pages/home/index' })
       return
     }
-
-    const processList = getProcessLibrary()
-    // 加载订单列表用于"从已有工单读取"
-    const copyOrders = listOrders()
-
-    this.setData({
-      currentUser,
-      processList,
-      copyOrders,
-      selectedSteps: [],
-      form: {
-        ...emptyForm(),
-        selectedStepKeys: []
-      }
-    })
+    try {
+      ui.showLoading('加载中...')
+      const [processList, orders] = await Promise.all([
+        Promise.resolve(api.getProcessLibrary()),
+        api.listOrders(1, 100).catch(() => [])
+      ])
+      this.setData({
+        currentUser,
+        processList,
+        copyOrders: orders || [],
+        selectedSteps: [],
+        form: { ...emptyForm(), selectedStepKeys: [] }
+      })
+    } catch (e) {
+      ui.handleError(e, '加载失败')
+    } finally {
+      ui.hideLoading()
+    }
   },
-  
+
   goToHome() {
     wx.reLaunch({ url: '/pages/home/index' })
   },
 
-  onShow() {
-    // 不再每次 onShow 都重置表单，避免上传图片时表单被清空
-  },
+  onShow() { /* 避免图片上传时表单被重置 */ },
 
   chooseDrawing() {
     wx.chooseMedia({
@@ -103,10 +104,7 @@ Page({
 
   toggleIsReorder() {
     this.setData({
-      form: {
-        ...this.data.form,
-        isReorder: !this.data.form.isReorder
-      }
+      form: { ...this.data.form, isReorder: !this.data.form.isReorder }
     })
   },
 
@@ -114,43 +112,24 @@ Page({
     const field = event.currentTarget.dataset.field
     const value = event.detail.value
     this.setData({
-      form: {
-        ...this.data.form,
-        [field]: value
-      }
+      form: { ...this.data.form, [field]: value }
     })
   },
 
   bindDueDate(event) {
-    this.setData({
-      form: {
-        ...this.data.form,
-        dueDate: event.detail.value
-      }
-    })
+    this.setData({ form: { ...this.data.form, dueDate: event.detail.value } })
   },
 
   setUrgent(event) {
     const value = event.currentTarget.dataset.value === 'true'
-    this.setData({
-      form: {
-        ...this.data.form,
-        urgent: value
-      }
-    })
+    this.setData({ form: { ...this.data.form, urgent: value } })
   },
 
   setIsReorder(event) {
     const value = event.currentTarget.dataset.value === 'true'
-    this.setData({
-      form: {
-        ...this.data.form,
-        isReorder: value
-      }
-    })
+    this.setData({ form: { ...this.data.form, isReorder: value } })
   },
 
-  // 嵌套对象字段绑定（如 drawingDetail.roughness）
   bindSubField(event) {
     const field = event.currentTarget.dataset.field
     const sub = event.currentTarget.dataset.sub
@@ -158,75 +137,55 @@ Page({
     this.setData({
       form: {
         ...this.data.form,
-        [sub]: {
-          ...(this.data.form[sub] || {}),
-          [field]: value
-        }
+        [sub]: { ...(this.data.form[sub] || {}), [field]: value }
       }
     })
   },
 
-  // drawingDetail 的布尔字段切换
   setDrawingDetailBool(event) {
     const key = event.currentTarget.dataset.key
     const value = event.currentTarget.dataset.value === 'true'
     this.setData({
       form: {
         ...this.data.form,
-        drawingDetail: {
-          ...(this.data.form.drawingDetail || {}),
-          [key]: value
-        }
+        drawingDetail: { ...(this.data.form.drawingDetail || {}), [key]: value }
       }
     })
   },
 
-  // 添加工序（支持重复添加）
   addStep(event) {
     const stepKey = event.currentTarget.dataset.key
     const step = this.data.processList.find((p) => p.key === stepKey)
     if (!step) return
-
     const form = this.data.form
     const newSelectedSteps = [...this.data.selectedSteps, { ...step, instanceId: `${stepKey}_${Date.now()}` }]
-
     this.setData({
       selectedSteps: newSelectedSteps,
-      form: {
-        ...form,
-        selectedStepKeys: newSelectedSteps.map((s) => s.key)
-      }
+      form: { ...form, selectedStepKeys: newSelectedSteps.map((s) => s.key) }
     })
   },
 
-  // 删除已选工序（支持删除重复工序的单个实例）
   removeSelectedStep(event) {
     const instanceId = event.currentTarget.dataset.instanceId
     const form = this.data.form
     const newSelectedSteps = this.data.selectedSteps.filter((s) => s.instanceId !== instanceId)
     this.setData({
       selectedSteps: newSelectedSteps,
-      form: {
-        ...form,
-        selectedStepKeys: newSelectedSteps.map((s) => s.key)
-      }
+      form: { ...form, selectedStepKeys: newSelectedSteps.map((s) => s.key) }
     })
   },
 
-  submit() {
+  async submit() {
     const app = getApp()
-    if (!app.requireActiveAccess('/pages/scan/index')) {
-      return
-    }
+    await app.waitForAccessReady()
+    if (!app.requireActiveAccess('/pages/scan/index')) return
     const currentUser = app.globalData.currentUser
     if (currentUser.role !== 'admin' && currentUser.role !== 'superadmin') {
-      wx.showToast({ title: '只有管理员可创建工单', icon: 'none' })
+      ui.toast('只有管理员可创建工单')
       return
     }
-
     const form = this.data.form
     const missing = []
-
     if (!form.customerName) missing.push('客户名称')
     if (!form.type) missing.push('种类')
     if (!form.size) missing.push('尺寸')
@@ -238,31 +197,63 @@ Page({
     if (form.urgent !== true && form.urgent !== false) missing.push('是否急要')
     if (form.isReorder !== true && form.isReorder !== false) missing.push('是否补单')
     if (!form.selectedStepKeys || form.selectedStepKeys.length === 0) missing.push('工序配置')
-
     if (missing.length > 0) {
-      wx.showToast({ title: '请填写：' + missing.join('、'), icon: 'none', duration: 2500 })
+      ui.toast('请填写：' + missing.join('、'), 'none', 2500)
       return
     }
 
     try {
-      const order = createOrder(
-        {
-          ...form,
-          stepKeys: form.selectedStepKeys,
-          drawings: form.drawings
-        },
-        currentUser.id
-      )
+      ui.showLoading('上传图纸中...')
+      // 上传图纸到云存储
+      const drawings = []
+      for (const d of (form.drawings || [])) {
+        if (d.tempFilePath) {
+          try {
+            const ext = (d.tempFilePath.match(/\.(\w+)$/) || [])[1] || 'jpg'
+            const cloudPath = `drawings/${form.singleNo || 'order'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+            const up = await wx.cloud.uploadFile({ cloudPath, filePath: d.tempFilePath })
+            drawings.push({
+              name: d.name,
+              fileID: up.fileID,
+              cloudPath: up.fileID,
+              type: d.type || 'image'
+            })
+          } catch (e) {
+            // 上传失败的图纸保留本地引用，避免阻断
+            drawings.push({ name: d.name, tempFilePath: d.tempFilePath, type: d.type || 'image' })
+          }
+        } else {
+          drawings.push(d)
+        }
+      }
 
-      this.setData({
-        form: emptyForm(),
-        createdOrderId: order.id
+      ui.showLoading('创建工单中...')
+      const result = await api.createOrder({
+        customerName: form.customerName,
+        type: form.type,
+        size: form.size,
+        qty: Number(form.qty),
+        material: form.material,
+        dueDate: form.dueDate,
+        singleNo: form.singleNo,
+        urgent: !!form.urgent,
+        isReorder: !!form.isReorder,
+        drawings,
+        stepKeys: form.selectedStepKeys,
+        drawingDetail: form.drawingDetail,
+        remarks: form.remarks || ''
       })
 
-      wx.showToast({ title: '工单创建成功', icon: 'success' })
-      wx.navigateTo({ url: `/pages/order-detail/index?id=${order.id}` })
-    } catch (error) {
-      wx.showToast({ title: error.message, icon: 'none' })
+      const order = result && result.order ? result.order : result
+      this.setData({ form: emptyForm(), createdOrderId: order.id || '' })
+      ui.hideLoading()
+      ui.toast('工单创建成功', 'success')
+      if (order.id) {
+        wx.navigateTo({ url: `/pages/order-detail/index?id=${order.id}` })
+      }
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '创建工单失败')
     }
   },
 
@@ -270,24 +261,23 @@ Page({
     wx.navigateTo({ url: '/pages/admin/index' })
   },
 
-  // 打开从已有工单读取弹窗
-  openCopyModal() {
-    const copyOrders = listOrders()
-    this.setData({ showCopyModal: true, copyOrders })
+  async openCopyModal() {
+    try {
+      const orders = await api.listOrders(1, 100)
+      this.setData({ showCopyModal: true, copyOrders: orders || [] })
+    } catch (e) {
+      ui.handleError(e, '加载工单失败')
+    }
   },
 
-  // 关闭弹窗
   closeCopyModal() {
     this.setData({ showCopyModal: false })
   },
 
-  // 从已有工单读取信息填充表单
   loadFromOrder(event) {
     const orderId = event.currentTarget.dataset.id
     const order = this.data.copyOrders.find((o) => o.id === orderId)
     if (!order) return
-
-    // 从工序库中还原已选工序
     const selectedSteps = (order.stepKeys || []).map((key) => {
       const proc = this.data.processList.find((p) => p.key === key)
       return proc ? { ...proc, instanceId: key + '_' + Date.now() } : null
@@ -320,7 +310,6 @@ Page({
       selectedSteps,
       showCopyModal: false
     })
-
-    wx.showToast({ title: '已读取：' + orderId, icon: 'none' })
+    ui.toast('已读取：' + orderId, 'none')
   }
 })

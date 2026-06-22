@@ -1,0 +1,9 @@
+{
+  "name": "autoBackup",
+  "version": "1.0.0",
+  "description": "自动定时备份（每1小时触发）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~3.0.4"
+  }
+}

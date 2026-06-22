@@ -124,9 +124,9 @@
           <view class="row">
             <view>
               <view class="person-name">{{item.name}}</view>
-              <view class="subtle">{{item.stations ? item.stations.join('、') : item.station}} · {{item.role === 'superadmin' ? '超级管理员' : item.role === 'admin' ? '管理员' : '员工'}} · {{item.status === 'active' ? '已启用' : '待审批'}}</view>
+              <view class="subtle">{{item.stations ? item.stations.join('、') : item.station}} · {{item.roleLabel || '员工'}} · {{item.statusLabel || '待审批'}}</view>
             </view>
-            <text class="badge {{item.status === 'active' ? 'badge-success' : 'badge-warning'}}">{{item.status === 'active' ? '已启用' : '待审批'}}</text>
+            <text class="badge {{item.status === 'active' ? 'badge-success' : 'badge-warning'}}">{{item.statusLabel || '待审批'}}</text>
           </view>
           <view class="card-actions">
             <button wx:if="{{currentUser.role === 'superadmin' && item.role !== 'superadmin' && item.role !== 'admin'}}" class="mini-btn success" data-id="{{item.id}}" bindtap="promoteToAdmin">设为管理员</button>

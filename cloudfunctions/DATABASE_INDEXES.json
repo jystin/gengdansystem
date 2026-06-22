@@ -1,0 +1,79 @@
+{
+  "description": "数据库索引配置，请在微信云开发控制台导入这些索引以优化查询性能",
+  "indexes": [
+    {
+      "collection": "orders",
+      "name": "id_index",
+      "fields": [{ "id": 1 }],
+      "unique": true
+    },
+    {
+      "collection": "orders",
+      "name": "status_index",
+      "fields": [{ "status": 1 }]
+    },
+    {
+      "collection": "orders",
+      "name": "paused_index",
+      "fields": [{ "paused": 1 }]
+    },
+    {
+      "collection": "orders",
+      "name": "urgent_index",
+      "fields": [{ "urgent": 1 }]
+    },
+    {
+      "collection": "orders",
+      "name": "dueDate_index",
+      "fields": [{ "dueDate": 1 }]
+    },
+    {
+      "collection": "orders",
+      "name": "createdAt_index",
+      "fields": [{ "createdAt": -1 }]
+    },
+    {
+      "collection": "users",
+      "name": "openid_index",
+      "fields": [{ "openid": 1 }],
+      "unique": true
+    },
+    {
+      "collection": "users",
+      "name": "status_index",
+      "fields": [{ "status": 1 }]
+    },
+    {
+      "collection": "inventory",
+      "name": "name_index",
+      "fields": [{ "name": 1 }],
+      "unique": true
+    },
+    {
+      "collection": "audit_logs",
+      "name": "createdAt_index",
+      "fields": [{ "createdAt": -1 }]
+    },
+    {
+      "collection": "audit_logs",
+      "name": "targetId_index",
+      "fields": [{ "targetId": 1 }]
+    },
+    {
+      "collection": "material_logs",
+      "name": "createdAt_index",
+      "fields": [{ "createdAt": -1 }]
+    },
+    {
+      "collection": "pending_applications",
+      "name": "status_index",
+      "fields": [{ "status": 1 }]
+    },
+    {
+      "collection": "daily_counters",
+      "name": "_key_index",
+      "fields": [{ "_key": 1 }],
+      "unique": true
+    }
+  ]
+}

@@ -1,25 +1,27 @@
 {
+  "cloudfunctionRoot": "cloudfunctions/",
+  "env": "cloud1-d5g9vjcxhac7a2f30",
   "description": "兴祥机械跟单小程序",
   "packOptions": {
     "ignore": [],
     "include": []
   },
   "setting": {
-    "urlCheck": false,
+    "urlCheck": true,
     "es6": true,
     "postcss": true,
     "minified": true,
-    "enhance": true,
-    "compileHotReLoad": true,
+    "enhance": false,
+    "compileHotReLoad": false,
     "showShadowRootInWxmlPanel": true,
-    "checkSiteMap": true,
+    "checkSiteMap": false,
     "useMultiFrameRuntime": true,
     "useApiHook": true,
     "useApiHostProcess": true,
     "lazyloadPlaceholderEnable": true,
     "compileWorklet": false,
     "uglifyFileName": false,
-    "uploadWithSourceMap": true,
+    "uploadWithSourceMap": false,
     "packNpmManually": false,
     "packNpmRelationList": [],
     "minifyWXSS": true,
@@ -39,9 +41,9 @@
   "appid": "wx9bfacc8055b12874",
   "compileType": "miniprogram",
   "miniprogramRoot": "miniprogram/",
-  "cloudfunctionRoot": "cloudfunctions/",
   "projectname": "兴祥机械跟单小程序",
   "simulatorPluginLibVersion": {},
   "editorSetting": {},
-  "libVersion": "3.16.0"
+  "libVersion": "3.16.0",
+  "cloudfunctionTemplateRoot": "cloudfunctionTemplate/"
 }

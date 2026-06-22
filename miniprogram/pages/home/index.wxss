@@ -380,6 +380,30 @@
 
 .emp-save-btn.primary { background: #0f766e; color: #fff; }
 
+/* 管理员操作行（仅超管可见） */
+.emp-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-top: 16rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx dashed #e2e8f0;
+}
+
+.emp-mini-btn {
+  font-size: 22rpx;
+  padding: 8rpx 18rpx;
+  border-radius: 8rpx;
+  font-weight: 500;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.emp-mini-btn.primary { background: #0f766e; color: #fff; }
+.emp-mini-btn.ghost   { background: #f1f5f9; color: #334155; }
+.emp-mini-btn.success { background: #16a34a; color: #fff; }
+.emp-mini-btn.danger  { background: #fef2f2; color: #b91c1c; border: 1rpx solid #fecaca; }
+
 /* ===== 月度统计（保留原有样式） ===== */
 .prod-toolbar {
   display: flex; justify-content: space-between; align-items: center;

@@ -86,9 +86,9 @@
       <view class="employee-item">
         <view class="row">
           <text class="employee-name">{{item.name}}</text>
-          <text class="badge badge-success">已启用</text>
+          <text class="badge badge-success">{{item.statusLabel || '已激活'}}</text>
         </view>
-        <view class="subtle">{{item.stations ? item.stations.join('、') : item.station}} · {{item.role === 'superadmin' ? '超级管理员' : item.role === 'admin' ? '管理员' : '员工'}}</view>
+        <view class="subtle">{{item.stations ? item.stations.join('、') : item.station}} · {{item.roleLabel || '员工'}}</view>
       </view>
     </block>
   </view>

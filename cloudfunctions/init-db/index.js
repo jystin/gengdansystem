@@ -11,27 +11,112 @@
  */
 
 const cloud = require('wx-server-sdk')
-const db = cloud.database()
 
 cloud.init({
   env: cloud.DYNAMIC_CURRENT_ENV
 })
 
+const db = cloud.database()
+
+function isMissingCollectionError(err) {
+  if (!err) return false
+  const msg = String(err.errMsg || err.message || '')
+  return (
+    err.errCode === -502005 ||
+    err.errCode === -502001 ||
+    msg.includes('not exist') ||
+    msg.includes('not found') ||
+    msg.includes('does not exist') ||
+    msg.includes('Database or Table')
+  )
+}
+
+async function safeGet(collectionName, queryBuilder) {
+  try {
+    return await queryBuilder(db.collection(collectionName))
+  } catch (err) {
+    if (isMissingCollectionError(err)) {
+      return { data: [] }
+    }
+    throw err
+  }
+}
+
+async function safeCount(collectionName) {
+  try {
+    return await db.collection(collectionName).count()
+  } catch (err) {
+    if (isMissingCollectionError(err)) {
+      return { total: 0 }
+    }
+    throw err
+  }
+}
+
+async function ensureCollection(collectionName) {
+  // 方式1：尝试 count 检测集合是否存在
+  try {
+    await db.collection(collectionName).count()
+    return true
+  } catch (err) {
+    if (!isMissingCollectionError(err)) return true
+  }
+
+  // 方式2：尝试 db.createCollection（新版 API）
+  if (typeof db.createCollection === 'function') {
+    try {
+      await db.createCollection(collectionName)
+      return true
+    } catch (err) { /* 继续尝试其他方式 */ }
+  }
+
+  // 方式3：尝试 add 文档来隐式创建集合
+  try {
+    const res = await db.collection(collectionName).add({
+      data: { _init: true, createdAt: db.serverDate() }
+    })
+    // 清理初始化文档
+    await db.collection(collectionName).doc(res._id).remove()
+    return true
+  } catch (err) { /* 静默处理 */ }
+
+  // 全部失败
+  return false
+}
+
 exports.main = async (event, context) => {
-  console.log('🔧 开始初始化数据库...\n')
+  const { adminOpenid, adminName = '江鑫（超管）', resetInventory } = event || {}
+  const wxContext = cloud.getWXContext()
+  const resolvedAdminOpenid = adminOpenid || wxContext.OPENID
 
-  const { adminOpenid, adminName = 'Administrator' } = event
-
-  if (!adminOpenid) {
+  if (!resolvedAdminOpenid) {
     return { 
       success: false, 
-      error: '缺少 adminOpenid 参数，请传入超级管理员的微信 openid'
+      error: '缺少 adminOpenid 参数，且未能从云函数上下文获取 OPENID'
     }
   }
 
   try {
+    // 第零步：确保所需集合存在
+    const requiredCollections = ['processes', 'users', 'inventory', 'audit_logs', 'orders', 'material_logs', 'pending_applications', 'invite_codes', 'backups', 'daily_counters', 'join_qrcodes']
+    const failedCollections = []
+    for (const col of requiredCollections) {
+      const ok = await ensureCollection(col)
+      if (!ok) {
+        failedCollections.push(col)
+      }
+    }
+
+    if (failedCollections.length > 0) {
+      return {
+        success: false,
+        error: `以下集合需手动创建：${failedCollections.join('、')}`,
+        missingCollections: failedCollections,
+        action: '请在微信开发者工具 → 云开发控制台 → 数据库 → 新建集合，逐个创建上述集合后重新调用 init-db。无需任何配置，保持默认权限即可。'
+      }
+    }
+
     // 第一步：初始化工序库
-    console.log('📋 初始化工序库...')
     const processes = [
       { key: 'blanking', name: '下料', station: '下料工' },
       { key: 'pressing', name: '敦压', station: '敦压工' },
@@ -51,25 +136,21 @@ exports.main = async (event, context) => {
     ]
 
     // 检查是否已初始化
-    const existingProcesses = await db.collection('processes').get()
+    const existingProcesses = await safeGet('processes', collection => collection.limit(1).get())
     if (existingProcesses.data.length === 0) {
       for (const proc of processes) {
         await db.collection('processes').add({ data: proc })
       }
-      console.log(`✅ 已添加 ${processes.length} 个工序\n`)
-    } else {
-      console.log('⏭️  工序库已存在，跳过\n')
     }
 
     // 第二步：初始化超级管理员账号
-    console.log('👤 初始化超级管理员账号...')
-    const existingAdmin = await db.collection('users').where({
-      openid: adminOpenid
-    }).get()
+    const existingAdmin = await safeGet('users', collection => collection.where({
+      openid: resolvedAdminOpenid
+    }).get())
 
     if (existingAdmin.data.length === 0) {
       const admin = {
-        openid: adminOpenid,
+        openid: resolvedAdminOpenid,
         name: adminName,
         role: 'superadmin',
         stations: ['超级管理员'],
@@ -79,24 +160,35 @@ exports.main = async (event, context) => {
         lastDeviceId: ''
       }
       await db.collection('users').add({ data: admin })
-      console.log(`✅ 已创建超级管理员账号: ${adminName} (openid: ${adminOpenid})\n`)
-    } else {
-      console.log('⏭️  超级管理员账号已存在\n')
     }
 
     // 第三步：初始化材料类型与库存
-    console.log('📦 初始化材料库存...')
     const materials = [
-      { name: '不锈钢420', stock: { '80': 1000.0 } },
-      { name: '不锈钢304', stock: { '80': 2.0 } },
-      { name: '不锈钢316', stock: { '100': 1.5 } },
+      { name: '不锈钢420', stock: {} },
+      { name: '不锈钢304', stock: {} },
+      { name: '不锈钢316', stock: {} },
       { name: '不锈钢431', stock: {} },
       { name: '铜', stock: {} },
       { name: '双相钢', stock: {} }
     ]
 
-    const existingInventory = await db.collection('inventory').get()
-    if (existingInventory.data.length === 0) {
+    const existingInventory = await safeGet('inventory', collection => collection.limit(1).get())
+    if (resetInventory && existingInventory.data.length > 0) {
+      // 强制重置：先清空库存和日志，再插入空数据
+      try {
+        // 逐条删除（云开发不支持直接清空集合）
+        const allInv = await safeGet('inventory', collection => collection.get())
+        for (const doc of allInv.data) {
+          await db.collection('inventory').doc(doc._id).remove()
+        }
+        // 同时清理材料操作日志
+        const allLogs = await safeGet('material_logs', collection => collection.get())
+        for (const doc of allLogs.data) {
+          await db.collection('material_logs').doc(doc._id).remove()
+        }
+      } catch (e) { /* 静默处理 */ }
+    }
+    if (existingInventory.data.length === 0 || resetInventory) {
       for (const mat of materials) {
         await db.collection('inventory').add({
           data: {
@@ -107,15 +199,10 @@ exports.main = async (event, context) => {
           }
         })
       }
-      console.log(`✅ 已初始化 ${materials.length} 种材料库存\n`)
-    } else {
-      console.log('⏭️  库存记录已存在\n')
     }
 
     // 第四步：初始化审计日志（可选）
-    console.log('📝 初始化审计日志集合...')
-    const existingLogs = await db.collection('audit_logs').count()
-    console.log(`✅ 审计日志集合已准备，当前记录数: ${existingLogs.total}\n`)
+    const existingLogs = await safeCount('audit_logs')
 
     // 返回初始化报告
     return {
@@ -123,13 +210,12 @@ exports.main = async (event, context) => {
       message: '数据库初始化完成！',
       summary: {
         processes: processes.length,
-        admin: { name: adminName, openid: adminOpenid },
+        admin: { name: adminName, openid: resolvedAdminOpenid },
         materials: materials.length,
         timestamp: new Date().toISOString()
       }
     }
   } catch (err) {
-    console.error('❌ 初始化失败:', err)
     return {
       success: false,
       error: err.message,

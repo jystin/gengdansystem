@@ -1,0 +1,9 @@
+{
+  "name": "fixAdminName",
+  "version": "1.0.0",
+  "description": "临时修复超管名字为江鑫（超管）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

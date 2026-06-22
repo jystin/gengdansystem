@@ -119,7 +119,7 @@
               <view class="emp-card-top">
                 <view class="emp-card-info">
                   <view class="emp-card-name">{{item.name}}</view>
-                  <view class="emp-card-role-badge {{item.role === 'superadmin' ? 'badge-superadmin' : item.role === 'admin' ? 'badge-admin' : item.status === 'pending' ? 'badge-pending' : 'badge-worker'}}">{{item.role === 'superadmin' ? '超管' : item.role === 'admin' ? '管理员' : item.status === 'pending' ? '待审' : '员工'}}</view>
+                  <view class="emp-card-role-badge {{item.role === 'superadmin' ? 'badge-superadmin' : item.role === 'admin' ? 'badge-admin' : item.status === 'pending' ? 'badge-pending' : 'badge-worker'}}">{{item.roleLabel}}</view>
                 </view>
                 <view wx:if="{{item.role !== 'superadmin'}}" class="emp-edit-btn" data-id="{{item.id}}" bindtap="toggleEmpEdit">{{editingEmpId === item.id ? '完成' : '编辑岗位'}}</view>
               </view>
@@ -148,6 +148,29 @@
                 <view class="emp-save-row">
                   <button class="emp-save-btn primary" data-id="{{item.id}}" bindtap="saveEmpStations">保存岗位</button>
                 </view>
+              </view>
+
+              <!-- 管理员操作行：仅超管对非超管员工可见 -->
+              <view wx:if="{{editingEmpId !== item.id && currentUserRole === 'superadmin' && item.role !== 'superadmin'}}" class="emp-admin-actions">
+                <button wx:if="{{item.role !== 'admin' && item.status === 'active'}}"
+                        class="emp-mini-btn primary"
+                        data-id="{{item.id}}"
+                        data-name="{{item.name}}"
+                        bindtap="promoteEmpToAdmin">设为管理员</button>
+                <button wx:if="{{item.role === 'admin'}}"
+                        class="emp-mini-btn ghost"
+                        data-id="{{item.id}}"
+                        data-name="{{item.name}}"
+                        bindtap="demoteEmpToWorker">取消管理员</button>
+                <button wx:if="{{item.status === 'pending'}}"
+                        class="emp-mini-btn success"
+                        data-id="{{item.id}}"
+                        data-name="{{item.name}}"
+                        bindtap="approvePendingEmp">通过审批</button>
+                <button class="emp-mini-btn danger"
+                        data-id="{{item.id}}"
+                        data-name="{{item.name}}"
+                        bindtap="removeEmp">删除</button>
               </view>
             </view>
           </block>

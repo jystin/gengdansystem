@@ -1,4 +1,5 @@
-const { listOrders, isAdmin, getOrdersForExport } = require('../../utils/mock-store')
+const api = require('../../utils/api')
+const ui = require('../../utils/ui')
 const { exportOrders } = require('../../utils/export-excel')
 
 const CATEGORY_OPTIONS = [
@@ -18,7 +19,7 @@ Page({
     activeCategory: 'all',
     categoryOptions: CATEGORY_OPTIONS,
     selectMode: false,
-    selectedSet: {},   // 用对象代替数组，key=orderId, value=true — 避免 indexOf 问题
+    selectedSet: {},
     selectedCount: 0,
     isAdmin: false,
     showDatePicker: false,
@@ -29,14 +30,13 @@ Page({
     selectedCustomerIndex: 0
   },
 
-  onShow() {
+  async onShow() {
     const app = getApp()
+    await app.waitForAccessReady()
     if (!app.requireActiveAccess('/pages/scan/index')) {
       return
     }
-    const user = app.globalData.currentUser
-    this.setData({ isAdmin: isAdmin(user) })
-    // 仅在首次进入或无 category 参数时才刷新（避免覆盖用户手动切换的 tab）
+    this.setData({ isAdmin: api.isCurrentUserAdmin() })
     if (!this._hasCategoryFromUrl) {
       this.refresh()
     }
@@ -54,15 +54,21 @@ Page({
     }
   },
 
-  refresh() {
-    const orders = listOrders()
-    this.setData({
-      orders,
-      filteredOrders: this._buildFiltered(orders)
-    })
+  async refresh() {
+    try {
+      ui.showLoading('加载中...')
+      const orders = await api.listOrders(1, 100)
+      this.setData({
+        orders: orders || [],
+        filteredOrders: this._buildFiltered(orders || [])
+      })
+    } catch (e) {
+      ui.handleError(e, '加载工单失败')
+    } finally {
+      ui.hideLoading()
+    }
   },
 
-  // 构建带 _checked 标记的列表（每次 selectedSet 变化时调用）
   _buildFiltered(orders) {
     const { selectedSet } = this.data
     return this.applyFilter(this.data.keyword, orders, this.data.activeCategory).map((o) => ({
@@ -71,7 +77,6 @@ Page({
     }))
   },
 
-  // 刷新 filteredOrders 的选中状态（不改变筛选条件）
   _refreshCheckState() {
     this.setData({
       filteredOrders: this._buildFiltered(this.data.orders),
@@ -97,13 +102,10 @@ Page({
 
   applyFilter(keyword, orders, activeCategory = 'all') {
     let result = orders
-
     if (activeCategory !== 'all') {
       result = result.filter((order) => order.category === activeCategory)
     }
-
     if (!keyword) return result
-
     return result.filter((order) => {
       const text = [order.id, order.customerName, order.type, order.size, order.material, order.currentStepName].join(' ')
       return text.includes(keyword)
@@ -136,7 +138,7 @@ Page({
   exportSelected() {
     const ids = Object.keys(this.data.selectedSet)
     if (ids.length === 0) {
-      wx.showToast({ title: '请先选择工单', icon: 'none' })
+      ui.toast('请先选择工单')
       return
     }
     this.doExport(ids)
@@ -154,12 +156,10 @@ Page({
     this.setData({ showDatePicker: false })
   },
 
-  // 用户点击了 picker 区域 → 记录时间戳，用于区分"点遮罩关闭"和"picker 关闭泄漏事件"
   onPickerAreaTap() {
     this._lastPickerTapTime = Date.now()
   },
 
-  // 点击遮罩层：300ms内有过 picker 操作则忽略（picker 原生组件关闭时会泄漏 tap 到 mask）
   onMaskTap() {
     if (this._lastPickerTapTime && Date.now() - this._lastPickerTapTime < 300) return
     this.hideDatePicker()
@@ -178,7 +178,7 @@ Page({
   confirmDateRangeExport() {
     const { dateStart, dateEnd } = this.data
     if (!dateStart && !dateEnd) {
-      wx.showToast({ title: '请至少选择一个日期', icon: 'none' })
+      ui.toast('请至少选择一个日期')
       return
     }
     this.hideDatePicker()
@@ -203,7 +203,6 @@ Page({
     this._lastPickerTapTime = Date.now()
   },
 
-  // 按客户导出：过滤出该客户的订单，走 doExport 统一排序
   confirmCustomerExport() {
     const { customerOptions, selectedCustomerIndex } = this.data
     const customerName = customerOptions[selectedCustomerIndex]
@@ -211,10 +210,9 @@ Page({
     this.doExport(null, null, `客户_${customerName}`, customerName)
   },
 
-  // 按客户名↑ + 下单时间↑ 排序（无下单日期的排到该客户最后）
   _sortByCustomerAndDate(orders) {
     return [...orders].sort((a, b) => {
-      const c = a.customerName.localeCompare(b.customerName, 'zh-CN')
+      const c = (a.customerName || '').localeCompare(b.customerName || '', 'zh-CN')
       if (c !== 0) return c
       if (!a.orderDate && !b.orderDate) return 0
       if (!a.orderDate) return 1
@@ -223,17 +221,23 @@ Page({
     })
   },
 
-  doExport(orderIds, dateRange, fileName, filterCustomer) {
-    wx.showLoading({ title: '正在生成导出文件...' })
-
+  async doExport(orderIds, dateRange, fileName, filterCustomer) {
     try {
-      let orders = getOrdersForExport(orderIds, dateRange)
+      ui.showLoading('正在生成导出文件...')
+      let orders = await api.listOrders(1, 100)
+      if (orderIds && orderIds.length > 0) {
+        orders = orders.filter(o => orderIds.includes(o.id))
+      }
+      if (dateRange) {
+        if (dateRange.start) orders = orders.filter(o => (o.orderDate || '') >= dateRange.start)
+        if (dateRange.end) orders = orders.filter(o => (o.orderDate || '') <= dateRange.end)
+      }
       if (filterCustomer) orders = orders.filter(o => o.customerName === filterCustomer)
       orders = this._sortByCustomerAndDate(orders)
 
       if (orders.length === 0) {
-        wx.hideLoading()
-        wx.showToast({ title: '该条件下没有可导出的工单', icon: 'none' })
+        ui.hideLoading()
+        ui.toast('该条件下没有可导出的工单')
         return
       }
 
@@ -243,17 +247,14 @@ Page({
         return '工单导出'
       })()
 
-      exportOrders(orders, name).then(() => {
-        wx.hideLoading()
-        this.setData({ selectMode: false, selectedSet: {}, selectedCount: 0 }, () => {
-          this._refreshCheckState()
-        })
-      }).catch(() => {
-        wx.hideLoading()
+      await exportOrders(orders, name)
+      ui.hideLoading()
+      this.setData({ selectMode: false, selectedSet: {}, selectedCount: 0 }, () => {
+        this._refreshCheckState()
       })
     } catch (e) {
-      wx.hideLoading()
-      wx.showToast({ title: '导出失败', icon: 'none' })
+      ui.hideLoading()
+      ui.handleError(e, '导出失败')
     }
   },
 
