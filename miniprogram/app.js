@@ -15,7 +15,7 @@ const STORAGE_TOKEN = 'authToken'
 App({
   globalData: {
     currentUser: null,
-    accessState: 'guest',     // guest | pending | active
+    accessState: 'guest',     // guest | pending | active | disabled
     deviceId: '',
     appName: '兴祥机械跟单系统',
     token: '',
@@ -24,6 +24,8 @@ App({
     isNetworkConnected: true,
     systemInfo: null,
     _lastAuthSyncTime: 0,     // 上次鉴权同步时间戳，用于 onShow 节流
+    _permissionWatcherTimer: null,  // 权限轮询定时器
+    _kickoutModalShown: false,      // 防止重复弹出踢出弹窗
 
     // ===== 隐私 API 授权配置 =====
     // 设为 true   → 启用完整的微信隐私 API 作用域检查（上线前需要在微信后台配置隐私协议）
@@ -113,13 +115,21 @@ App({
 
   /**
    * 小程序从后台回到前台时，自动刷新鉴权状态
-   * （解决管理员在后台提升员工权限后，员工不重启就拿到旧角色的问题）
-   * 节流：30 秒内不重复刷新
+   * 解决管理员在后台删除/提升员工后，员工回到前台权限未更新的问题
    */
   onShow() {
     const now = Date.now()
-    if (now - this.globalData._lastAuthSyncTime < 30000) return
-    this.refreshAuthContext()
+    // 活跃用户回到前台时强制刷新鉴权（10 秒节流，避免频繁请求）
+    if (this.globalData.accessState === 'active' && now - this.globalData._lastAuthSyncTime >= 10000) {
+      this.refreshAuthContext()
+    }
+  },
+
+  /**
+   * 小程序进入后台时，停止权限轮询以节省资源
+   */
+  onHide() {
+    this.stopPermissionWatcher()
   },
 
   /**
@@ -127,6 +137,8 @@ App({
    * 适用于：管理员权限变更后、角色切换等场景
    */
   async refreshAuthContext() {
+    // 已有踢出弹窗展示中，不再刷新
+    if (this.globalData._kickoutModalShown) return
     this.globalData._lastAuthSyncTime = Date.now()
     // 重置鉴权 Promise，使下一次 waitForAccessReady 等待新的同步结果
     this.globalData.accessReady = false
@@ -272,15 +284,24 @@ App({
           this.globalData.token = res.token
           wx.setStorageSync(STORAGE_TOKEN, res.token)
         } else {
-          // pending/guest 状态清除 token
+          // pending/guest/disabled 状态清除 token
           wx.removeStorageSync(STORAGE_TOKEN)
           this.globalData.token = ''
+        }
+        // 检测到被禁用时停止权限轮询，由页面 requireActiveAccess 拦截
+        if (res.state === 'disabled') {
+          this.stopPermissionWatcher()
+        }
+        // 活跃或待审批用户启动权限轮询监视器
+        if (res.state === 'active' || res.state === 'pending') {
+          this.startPermissionWatcher()
         }
       }
     } catch (e) {
       console.error('[app] syncAccessContext failed:', e)
       this.globalData.currentUser = null
       this.globalData.accessState = 'guest'
+      this.stopPermissionWatcher()
     }
     return {
       state: this.globalData.accessState,
@@ -296,19 +317,154 @@ App({
     this.globalData.token = ''
     this.globalData.currentUser = null
     this.globalData.accessState = 'guest'
+    this.globalData.accessReady = true
+    this.globalData.authReadyPromise = null
+  },
+
+  /**
+   * 启动权限轮询监视器（每 30 秒检查一次账号状态）
+   */
+  startPermissionWatcher() {
+    this.stopPermissionWatcher()
+    this.globalData._kickoutModalShown = false
+    // 立即执行一次检查
+    this._checkUserAccessStatus()
+    // 每 3 秒轮询，确保账号被删除后实时踢出
+    this.globalData._permissionWatcherTimer = setInterval(() => {
+      this._checkUserAccessStatus()
+    }, 3000)
+  },
+
+  /**
+   * 停止权限轮询监视器
+   */
+  stopPermissionWatcher() {
+    if (this.globalData._permissionWatcherTimer) {
+      clearInterval(this.globalData._permissionWatcherTimer)
+      this.globalData._permissionWatcherTimer = null
+    }
+  },
+
+  /**
+   * 检查用户账号实时状态（轻量级查询）
+   * 仅在 accessState 为 active 或 pending 时执行
+   */
+  async _checkUserAccessStatus() {
+    const currentState = this.globalData.accessState
+    // 非活跃/待审批用户无需轮询
+    if (currentState !== 'active' && currentState !== 'pending') return
+    // 已有踢出弹窗展示中，不再重复检查
+    if (this.globalData._kickoutModalShown) return
+
+    try {
+      const api = require('./utils/api')
+      const res = await api.checkAccess()
+      if (!res || !res.state) return
+
+      const previousState = currentState
+      const newState = res.state
+
+      // 状态未变化，无需处理
+      if (previousState === newState) return
+
+      // 场景一：员工被管理员删除（active → disabled）
+      if (previousState === 'active' && newState === 'disabled') {
+        this.forceKickout('您的账号已被管理员移除，无法继续访问系统')
+        return
+      }
+
+      // 场景二：员工审批通过（pending → active）
+      if (previousState === 'pending' && newState === 'active') {
+        // 强制重新同步完整鉴权信息
+        await this.syncAccessContext()
+        if (this.globalData.accessState !== 'active') return // 二次确认
+        wx.showToast({ title: '审批已通过，欢迎加入！', icon: 'success', duration: 2000 })
+        setTimeout(() => {
+          wx.reLaunch({ url: '/pages/home/index' })
+        }, 2000)
+        return
+      }
+
+      // 场景三：pending 变 disabled（申请被拒绝后又删除）
+      if (previousState === 'pending' && newState === 'disabled') {
+        this._clearAuth()
+        this.globalData.accessState = 'disabled'
+        this.stopPermissionWatcher()
+        return
+      }
+
+      // 其他状态变化：直接同步全局状态
+      if (res.user) {
+        this.globalData.currentUser = res.user
+      }
+      this.globalData.accessState = newState
+    } catch (e) {
+      // 网络错误静默处理，不因断网误踢用户
+      console.warn('[app] _checkUserAccessStatus failed:', e)
+    }
+  },
+
+  /**
+   * 强制踢出用户：清除鉴权、弹出阻塞弹窗、重定向到申请页
+   * @param {string} reason 踢出原因（展示给用户）
+   */
+  forceKickout(reason) {
+    if (this.globalData._kickoutModalShown) return
+    this.globalData._kickoutModalShown = true
+
+    // 清除所有鉴权数据
+    this._clearAuth()
+    this.globalData.accessState = 'disabled'
+    this.stopPermissionWatcher()
+
+    // 展示阻塞式模态弹窗（用户无法关闭后继续操作）
+    wx.showModal({
+      title: '账号已被移除',
+      content: reason || '您的账号已被管理员移除，无法继续访问系统',
+      showCancel: false,
+      confirmText: '我知道了',
+      success: () => {
+        wx.reLaunch({ url: '/pages/join/index' })
+      }
+    })
   },
 
   /**
    * 权限守卫：未激活用户只能跳转到 scan/join
+   * 支持三种状态检测：
+   *   - active:   放行
+   *   - disabled: 展示阻塞弹窗 + 强制跳转 join 页
+   *   - pending:  提示待审批 + 跳转 join 页
+   *   - guest:    提示申请 + 跳转 join 页
+   * @param {string} redirectUrl 重定向目标页
    * @returns {boolean} 是否通过
    */
   requireActiveAccess(redirectUrl) {
     if (this.globalData.accessState === 'active' && this.globalData.currentUser) {
       return true
     }
+
+    // 已删除用户：展示阻塞弹窗，无法跳过
+    if (this.globalData.accessState === 'disabled') {
+      if (!this.globalData._kickoutModalShown) {
+        this.globalData._kickoutModalShown = true
+        this.stopPermissionWatcher()
+        wx.showModal({
+          title: '账号已被移除',
+          content: '您的账号已被管理员移除，无法继续访问系统',
+          showCancel: false,
+          confirmText: '我知道了',
+          success: () => {
+            wx.reLaunch({ url: redirectUrl || '/pages/join/index' })
+          }
+        })
+      }
+      return false
+    }
+
     const message = this.globalData.accessState === 'pending'
       ? '申请已提交，待管理员审批后可进入系统'
-      : '仅限内部员工通过管理员分享链接申请后使用'
+      : '请先填写信息申请加入系统'
     wx.showToast({ title: message, icon: 'none', duration: 2000 })
     if (redirectUrl) {
       wx.redirectTo({ url: redirectUrl })

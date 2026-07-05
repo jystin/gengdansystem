@@ -6,8 +6,8 @@
     <view class="title">扫码进入工单</view>
     <view class="subtle">支持扫码枪、相机扫码，或手动输入工单号</view>
 
-    <view wx:if="{{currentUser.role === 'worker' && currentUser.status !== 'active'}}" class="pending-tip">
-      当前账号处于待审批状态，必须先由管理员在管理中心通过后才能进入系统。
+    <view wx:if="{{accessState === 'pending'}}" class="pending-tip">
+      当前账号处于待审批状态，请等待管理员在管理中心通过后即可进入系统。
     </view>
 
     <button class="scan-btn" bindtap="scanCode">开始扫码</button>
@@ -18,15 +18,7 @@
     </view>
   </view>
 
-  <view class="join-card card">
-    <view class="section-title">申请加入系统</view>
-    <view class="subtle">仅可使用管理员分享链接或二维码内的入驻码进入申请页，提交后进入待审批列表</view>
-    <view class="join-actions">
-      <button class="join-btn primary" bindtap="openJoinFromInput">用输入框中的入驻码打开申请页</button>
-    </view>
-  </view>
-
-  <view class="list card">
+  <view class="list card" wx:if="{{quickOrders.length > 0}}">
     <view class="section-title">最近工单</view>
     <block wx:for="{{quickOrders}}" wx:key="id">
       <view class="quick-item" bindtap="openOrder" data-id="{{item.id}}">

@@ -19,26 +19,6 @@
     </view>
   </view>
 
-  <view class="section card">
-    <view class="section-head">
-      <view>
-        <view class="section-title">分享入驻</view>
-        <view class="subtle">员工扫码后进入申请页，提交后只会进入待审批列表，只有管理员能通过</view>
-      </view>
-    </view>
-
-    <view class="invite-box">
-      <view class="invite-code">{{joinInviteCode}}</view>
-      <view class="subtle">扫码内容：{{joinInvitePath}}</view>
-    </view>
-
-    <view class="card-actions">
-      <button class="mini-btn success" open-type="share">分享给员工</button>
-      <button class="mini-btn ghost" bindtap="copyJoinInvite">复制入驻链接</button>
-      <button class="mini-btn ghost" bindtap="goJoinPage">打开申请页</button>
-    </view>
-  </view>
-
   <view class="metrics">
     <view class="metric card metric-all" bindtap="goOrdersByCategory" data-category="all">
       <view class="metric-left">
@@ -88,25 +68,32 @@
     <view class="section-head">
       <view>
         <view class="section-title">待审批员工</view>
-        <view class="subtle">员工扫码申请或通过分享链接加入后，会先进入此处</view>
+        <view class="subtle">新员工打开小程序申请加入后，审批前会先进入此处</view>
       </view>
     </view>
 
-    <block wx:for="{{pendingEmployees}}" wx:key="id">
-      <view class="person-card">
-        <view class="row">
-          <view>
-            <view class="person-name">{{item.name}}</view>
-            <view class="subtle">{{item._stationDisplay || '未分配岗位'}} · {{item.inviteSource || 'admin'}} · {{item.inviteNote || '无备注'}}</view>
+    <block wx:if="{{pendingEmployees.length > 0}}">
+      <block wx:for="{{pendingEmployees}}" wx:key="id">
+        <view class="person-card">
+          <view class="row">
+            <view>
+              <view class="person-name">{{item.name}}</view>
+              <view class="subtle">{{item._stationDisplay || '未分配岗位'}} · {{item.note || '无备注'}}</view>
+            </view>
+            <text class="badge badge-warning">待审批</text>
           </view>
-          <text class="badge badge-warning">待审批</text>
+          <view class="card-actions">
+            <button class="mini-btn success" data-id="{{item.id}}" bindtap="approveEmployee">通过</button>
+            <button class="mini-btn ghost" data-id="{{item.id}}" bindtap="rejectEmployee">驳回</button>
+            <button class="mini-btn danger" data-id="{{item.id}}" bindtap="deleteEmployee">删除</button>
+          </view>
         </view>
-        <view class="card-actions">
-          <button class="mini-btn success" data-id="{{item.id}}" bindtap="approveEmployee">通过</button>
-          <button class="mini-btn ghost" data-id="{{item.id}}" bindtap="rejectEmployee">驳回</button>
-        </view>
-      </view>
+      </block>
     </block>
+    <view wx:else class="empty-state">
+      <view class="empty-icon">✓</view>
+      <view class="empty-text">暂无待审批员工</view>
+    </view>
   </view>
 
   <view class="section card">
@@ -131,7 +118,7 @@
           <view class="card-actions">
             <button wx:if="{{currentUser.role === 'superadmin' && item.role !== 'superadmin' && item.role !== 'admin'}}" class="mini-btn success" data-id="{{item.id}}" bindtap="promoteToAdmin">设为管理员</button>
             <button wx:if="{{currentUser.role === 'superadmin' && item.role === 'admin'}}" class="mini-btn ghost" data-id="{{item.id}}" bindtap="demoteToWorker">取消管理员</button>
-            <button wx:if="{{(currentUser.role === 'admin' && item.role === 'worker') || currentUser.role === 'superadmin' && item.role !== 'superadmin'}}" class="mini-btn danger" data-id="{{item.id}}" bindtap="deleteEmployee">删除</button>
+            <button wx:if="{{((currentUser.role === 'admin' && item.role === 'worker') || (currentUser.role === 'superadmin' && item.role !== 'superadmin'))}}" class="mini-btn danger" data-id="{{item.id}}" bindtap="deleteEmployee">删除</button>
           </view>
         </view>
       </block>

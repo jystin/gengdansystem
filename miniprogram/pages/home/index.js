@@ -43,7 +43,7 @@ Page({
       await app.refreshAuthContext()
     }
     await app.waitForAccessReady()
-    if (!app.requireActiveAccess('/pages/scan/index')) {
+    if (!app.requireActiveAccess('/pages/join/index')) {
       return
     }
     const user = app.globalData.currentUser || { role: 'guest', status: 'guest' }
@@ -167,6 +167,46 @@ Page({
     this.setData({ showEmpModal: false, editingEmpId: '' })
   },
 
+  /**
+   * 仅刷新员工管理弹窗内的数据（不关闭弹窗）
+   * 用于"设为管理员""取消管理员""通过审批""删除员工"等操作后的就地刷新
+   */
+  async _reloadEmpModal() {
+    try {
+      const currentUser = getApp().globalData.currentUser || {}
+      const employees = await api.listEmployees()
+      const empList = (employees || []).map(emp => {
+        const nameFallback = (currentUser.id && emp.id === currentUser.id && currentUser.name)
+          ? currentUser.name : '员工'
+        return {
+          ...emp,
+          name: api.cleanName(emp.name, nameFallback),
+          stations: (Array.isArray(emp.stations) ? emp.stations : (emp.station ? [emp.station] : [])).filter(s => s !== '管理员中心'),
+          _stationDisplay: api.getEmployeeDisplayStations(emp),
+          roleLabel: api.roleLabel(emp.role),
+          statusLabel: api.statusLabel(emp.status)
+        }
+      })
+
+      const year = this.data.prodYear || String(new Date().getFullYear())
+      const stats = (await api.getAllEmployeesMonthlyProduction(year).catch(() => [])).map(s => ({
+        ...s,
+        employee: { ...s.employee, name: api.cleanName(s.employee.name, '员工'), _stationDisplay: api.getEmployeeDisplayStations(s.employee) }
+      }))
+
+      if (!this._isPageAlive) return
+      this.setData({
+        empList,
+        productionStats: stats,
+        monthHeaders: api.buildMonthHeaders(year),
+        prodEmployeeNames: stats.map(s => `${s.employee.name} · ${api.getEmployeeDisplayStations(s.employee)}`),
+        editingEmpId: ''
+      })
+    } catch (e) {
+      console.warn('[home] 刷新员工弹窗数据失败:', e)
+    }
+  },
+
   switchEmpTab(event) {
     const tab = event.currentTarget.dataset.tab
     this.setData({ empTab: tab })
@@ -258,7 +298,7 @@ Page({
     try {
       ui.showLoading('处理中...')
       await api.updateEmployeeRole(id, 'admin')
-      await this.toggleEmpModal() // 刷新整个员工弹窗
+      await this._reloadEmpModal() // 就地刷新员工列表，保持弹窗打开
       ui.hideLoading()
       ui.toast(`「${name}」已设为管理员`, 'success')
     } catch (e) {
@@ -278,7 +318,7 @@ Page({
     try {
       ui.showLoading('处理中...')
       await api.updateEmployeeRole(id, 'worker')
-      await this.toggleEmpModal()
+      await this._reloadEmpModal() // 就地刷新员工列表，保持弹窗打开
       ui.hideLoading()
       ui.toast(`已取消「${name}」的管理员权限`, 'none')
     } catch (e) {
@@ -296,7 +336,7 @@ Page({
     try {
       ui.showLoading('处理中...')
       await api.approveEmployee(id)
-      await this.toggleEmpModal()
+      await this._reloadEmpModal() // 就地刷新员工列表，保持弹窗打开
       ui.hideLoading()
       ui.toast(`「${name}」已通过审批`, 'success')
     } catch (e) {
@@ -316,7 +356,7 @@ Page({
     try {
       ui.showLoading('删除中...')
       await api.deleteEmployee(id)
-      await this.toggleEmpModal()
+      await this._reloadEmpModal() // 就地刷新员工列表，保持弹窗打开
       ui.hideLoading()
       ui.toast('已删除', 'none')
     } catch (e) {

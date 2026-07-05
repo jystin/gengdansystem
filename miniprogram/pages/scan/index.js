@@ -5,21 +5,26 @@ Page({
   data: {
     orderId: '',
     quickOrders: [],
-    currentUser: { role: '', status: 'active' }
+    currentUser: { role: '', status: 'active' },
+    accessState: 'guest'
   },
 
   async onShow() {
     const app = getApp()
     const access = await app.waitForAccessReady()
-    try {
-      const orders = await api.listOrders(1, 100)
-      this.setData({
-        quickOrders: (orders || []).slice(0, 5),
-        currentUser: (access && access.user) || app.globalData.currentUser || { role: 'guest', status: 'guest' }
-      })
-    } catch (e) {
-      this.setData({ quickOrders: [], currentUser: app.globalData.currentUser || { role: 'guest', status: 'guest' } })
+    const accessState = app.globalData.accessState || 'guest'
+    let quickOrders = []
+    if (accessState === 'active') {
+      try {
+        const orders = await api.listOrders(1, 100)
+        quickOrders = (orders || []).slice(0, 5)
+      } catch (e) { /* 静默 */ }
     }
+    this.setData({
+      quickOrders,
+      currentUser: (access && access.user) || app.globalData.currentUser || { role: 'guest', status: 'guest' },
+      accessState
+    })
   },
 
   ensureInternalAccess() {
@@ -36,17 +41,14 @@ Page({
   },
 
   async scanCode() {
-    if (!this.ensureInternalAccess()) return
-    // 隐私合规：扫码也会调用相机
     const app = getApp()
     if (!(await app.requirePrivacyAuthorize())) return
     wx.scanCode({
       onlyFromCamera: false,
       success: (result) => {
         try {
+          if (!this.ensureInternalAccess()) return
           const scannedText = result.result || result.path || ''
-          const inviteCode = this.extractJoinInvite(scannedText)
-          if (inviteCode) { this.openJoinPage(inviteCode); return }
           const orderId = this.extractOrderId(scannedText)
           if (!orderId) { ui.toast('未识别到工单号'); return }
           this.openOrder(orderId)
@@ -61,20 +63,6 @@ Page({
     return matched ? matched[0] : String(text).trim()
   },
 
-  extractJoinInvite(text) {
-    const matched = String(text).match(/(INV|JOIN)-[A-Z0-9]{6,12}/)
-    return matched ? matched[0] : ''
-  },
-
-  openJoinPage(inviteCode = '') {
-    const code = this.extractJoinInvite(inviteCode)
-    if (!code) {
-      ui.toast('请先输入或扫描管理员分享的入驻码')
-      return
-    }
-    wx.navigateTo({ url: `/pages/join/index?invite=${code}` })
-  },
-
   openByInput() {
     if (!this.ensureInternalAccess()) return
     const orderId = this.extractOrderId(this.data.orderId)
@@ -82,15 +70,6 @@ Page({
     this.openOrder(orderId)
   },
 
-  goJoinPage() { this.openJoinFromInput() },
-
-  openJoinFromInput() {
-    const inviteCode = this.extractJoinInvite(this.data.orderId)
-    if (!inviteCode) { ui.toast('请输入或扫描入驻码'); return }
-    this.openJoinPage(inviteCode)
-  },
-
-  // 兼容两种调用：模板事件（event 对象）和代码传参（字符串 orderId）
   openOrder(target) {
     if (!this.ensureInternalAccess()) return
     const orderId = typeof target === 'string' ? target : (target && target.currentTarget && target.currentTarget.dataset.id)

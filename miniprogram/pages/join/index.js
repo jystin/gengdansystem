@@ -3,69 +3,84 @@ const ui = require('../../utils/ui')
 
 Page({
   data: {
-    inviteCode: '',
-    form: {
-      name: '',
-      station: '',
-      note: ''
-    }
+    name: '',
+    stations: [],       // 已选岗位列表：['下料工', '精车工', ...]
+    submitting: false
   },
 
-  onLoad(options) {
-    this.setData({ inviteCode: options.invite || '' })
+  onLoad() {
     const app = getApp()
     if (app.globalData.accessState === 'active') {
-      ui.toast('当前账号已通过审批', 'none')
+      ui.toast('当前账号已通过审批，无需重复申请', 'none')
     }
+    if (app.globalData.accessState === 'disabled') {
+      ui.toast('您的账号已被管理员移除，可重新提交申请', 'none')
+    }
+    // 加载系统预设岗位列表
+    this.setData({
+      allStations: api.getProcessLibrary().map(p => ({
+        station: p.station,
+        name: p.name,
+        checked: false
+      }))
+    })
   },
 
-  bindField(event) {
-    const field = event.currentTarget.dataset.field
-    const value = event.detail.value
-    this.setData({ form: { ...this.data.form, [field]: value } })
+  bindNameInput(e) {
+    this.setData({ name: e.detail.value.trim() })
+  },
+
+  toggleStation(e) {
+    const station = e.currentTarget.dataset.station
+    const index = e.currentTarget.dataset.index
+    let stations = [...this.data.stations]
+    let allStations = [...this.data.allStations]
+    const idx = stations.indexOf(station)
+    if (idx >= 0) {
+      stations.splice(idx, 1)
+      allStations[index].checked = false
+    } else {
+      stations.push(station)
+      allStations[index].checked = true
+    }
+    this.setData({ stations, allStations })
   },
 
   async submitApplication() {
+    if (this.data.submitting) return
     const app = getApp()
     try {
       if (app.globalData.accessState === 'active') {
         ui.toast('当前账号已通过审批，无需申请')
         return
       }
-      if (!this.data.inviteCode) {
-        ui.toast('入驻码无效或已过期')
+      if (!this.data.name) {
+        ui.toast('请填写姓名')
         return
       }
-      if (!this.data.form.name || !this.data.form.station) {
-        ui.toast('请填写姓名和岗位')
+      if (this.data.stations.length === 0) {
+        ui.toast('请至少选择一个岗位')
         return
       }
+      this.setData({ submitting: true })
       ui.showLoading('提交中...')
       await api.submitJoinApplication({
-        name: this.data.form.name,
-        station: this.data.form.station,
-        note: this.data.form.note,
-        inviteCode: this.data.inviteCode
+        name: this.data.name,
+        stations: this.data.stations
       })
-      // 重新走鉴权刷新本地状态
       app.globalData.accessReady = false
       app.globalData.authReadyPromise = null
       await app.syncAccessContext()
       ui.hideLoading()
       ui.toast('申请已提交，等待管理员审批', 'success')
-      this.setData({ form: { name: '', station: '', note: '' } })
+      const allStations = this.data.allStations.map(s => ({ ...s, checked: false }))
+      this.setData({ name: '', stations: [], allStations, submitting: false })
     } catch (e) {
       ui.hideLoading()
+      this.setData({ submitting: false })
       ui.handleError(e, '提交失败')
     }
   },
 
-  goToHome() { wx.reLaunch({ url: '/pages/home/index' }) },
-
-  onShareAppMessage() {
-    return {
-      title: '申请加入兴祥机械跟单系统',
-      path: `/pages/join/index?invite=${this.data.inviteCode}`
-    }
-  }
+  goToHome() { wx.reLaunch({ url: '/pages/home/index' }) }
 })

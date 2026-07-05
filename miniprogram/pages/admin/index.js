@@ -45,8 +45,6 @@ Page({
     pendingEmployees: [],
     logs: [],
     roleOptions: [],
-    joinInvitePath: '',
-    joinQRFileID: '',
     createForm: emptyCreateForm(),
     inviteForm: emptyInviteForm(),
     employeePanelOpen: false,
@@ -91,15 +89,6 @@ Page({
         return { ...e, name: api.cleanName(e.name, nameFallback), roleLabel: api.roleLabel(e.role), statusLabel: api.statusLabel(e.status), _stationDisplay: api.getEmployeeDisplayStations(e) }
       })
       const pendingEmployees = cleanedEmployees.filter((employee) => employee.status === 'pending')
-      let joinInvitePath = ''
-      let joinQRFileID = ''
-      try {
-        const qr = await api.generateJoinQRCode(false)
-        if (qr && qr.success) {
-          joinInvitePath = qr.invitePath || ''
-          joinQRFileID = qr.fileID || ''
-        }
-      } catch (e) { /* 静默 */ }
 
       this.setData({
         currentUser,
@@ -109,8 +98,6 @@ Page({
         pendingEmployees,
         logs: (logs || []).slice(0, 12).map(api.normalizeLog).filter(Boolean),
         roleOptions,
-        joinInvitePath,
-        joinQRFileID,
         inviteForm: {
           ...this.data.inviteForm,
           roleIndex: Math.min(this.data.inviteForm.roleIndex, roleOptions.length - 1)
@@ -131,38 +118,6 @@ Page({
   goProfile() { wx.navigateTo({ url: '/pages/profile/index' }) },
   goScan() { wx.navigateTo({ url: '/pages/scan/index' }) },
   goMaterial() { wx.navigateTo({ url: '/pages/material/index' }) },
-
-  goJoinPage() {
-    if (this.data.joinInvitePath) {
-      wx.navigateTo({ url: this.data.joinInvitePath })
-    }
-  },
-
-  copyJoinInvite() {
-    const path = this.data.joinInvitePath
-    if (!path) { ui.toast('入驻链接生成中'); return }
-    wx.setClipboardData({
-      data: path,
-      success: () => { ui.toast('入驻链接已复制', 'none') }
-    })
-  },
-
-  async refreshJoinQR() {
-    try {
-      ui.showLoading('生成中...')
-      const qr = await api.generateJoinQRCode(true)
-      if (qr && qr.success) {
-        this.setData({ joinInvitePath: qr.invitePath || '', joinQRFileID: qr.fileID || '' })
-        ui.toast('已刷新', 'success')
-      } else {
-        ui.toast('生成失败')
-      }
-    } catch (e) {
-      ui.handleError(e, '生成失败')
-    } finally {
-      ui.hideLoading()
-    }
-  },
 
   goCreateOrder() { wx.navigateTo({ url: '/pages/create-order/index' }) },
   goOrdersByCategory(event) {
@@ -253,7 +208,7 @@ Page({
     const { id } = event.currentTarget.dataset
     try {
       await api.approveEmployee(id)
-      await this.onShow()
+      await this._reloadEmployees()
       ui.toast('已通过审批', 'success')
     } catch (e) {
       ui.handleError(e, '操作失败')
@@ -264,7 +219,7 @@ Page({
     const { id } = event.currentTarget.dataset
     try {
       await api.rejectEmployee(id)
-      await this.onShow()
+      await this._reloadEmployees()
       ui.toast('已驳回', 'none')
     } catch (e) {
       ui.handleError(e, '操作失败')
@@ -273,15 +228,80 @@ Page({
 
   async deleteEmployee(event) {
     const { id } = event.currentTarget.dataset
-    const target = this.data.employees.find((employee) => employee.id === id)
-    const ok = await ui.confirm(`确定要删除 ${target ? target.name : '该员工'} 吗？`, '确认删除')
+    const target = this.data.employees.find((employee) => employee.id === id) ||
+                   this.data.pendingEmployees.find((employee) => employee.id === id)
+
+    // 禁止管理员删除自己，避免把自己锁在管理中心外
+    if (target && this.data.currentUser && target.id === this.data.currentUser.id) {
+      ui.toast('不能删除当前登录账号', 'none')
+      return
+    }
+
+    const targetName = target ? target.name : '该员工'
+    const ok = await ui.confirm(
+      `确定要永久删除 ${targetName} 吗？\n\n⚠ 此操作会从云端物理删除该员工数据，不可恢复。`,
+      '确认永久删除'
+    )
     if (!ok) return
+
+    // ========== 乐观更新：先从本地列表移除 ==========
+    const prevEmployees = [...this.data.employees]
+    const prevPending = [...this.data.pendingEmployees]
+    const removedEmployee = this.data.employees.find(e => e.id === id) || null
+    const removedPending = this.data.pendingEmployees.find(e => e.id === id) || null
+
+    this.setData({
+      employees: this.data.employees.filter(e => e.id !== id),
+      pendingEmployees: this.data.pendingEmployees.filter(e => e.id !== id)
+    })
+
+    ui.showLoading('删除中...')
+
     try {
-      await api.deleteEmployee(id)
-      await this.onShow()
-      ui.toast('已删除', 'none')
+      // ========== 调用云端API物理删除 ==========
+      const result = await api.deleteEmployee(id)
+
+      ui.hideLoading()
+      ui.toast(result.message || '已删除', 'none')
+
+      // 云端成功后刷新全量列表，确保与云端一致
+      await this._reloadEmployees()
     } catch (e) {
-      ui.handleError(e, '删除失败')
+      // ========== 云端删除失败 → 回滚本地状态 ==========
+      console.error('[admin] 删除员工失败，执行本地回滚:', e)
+      this.setData({
+        employees: prevEmployees,
+        pendingEmployees: prevPending
+      })
+      ui.hideLoading()
+      ui.handleError(e, '删除失败，数据已回滚')
+    }
+  },
+
+  /**
+   * 仅刷新员工列表（不刷新工单、日志等）
+   * 用于删除/审批操作后的局部更新
+   */
+  async _reloadEmployees() {
+    try {
+      const app = getApp()
+      const [employees, logs] = await Promise.all([
+        api.listEmployees().catch(() => []),
+        api.listLogs(2).catch(() => [])
+      ])
+      const cleanedEmployees = (employees || []).map(e => {
+        const nameFallback = (app.globalData.currentUser &&
+          app.globalData.currentUser.id === e.id && app.globalData.currentUser.name)
+          ? app.globalData.currentUser.name : '员工'
+        return { ...e, name: api.cleanName(e.name, nameFallback), roleLabel: api.roleLabel(e.role), statusLabel: api.statusLabel(e.status), _stationDisplay: api.getEmployeeDisplayStations(e) }
+      })
+      this.setData({
+        employees: cleanedEmployees,
+        pendingEmployees: cleanedEmployees.filter(e => e.status === 'pending'),
+        logs: (logs || []).slice(0, 12).map(api.normalizeLog).filter(Boolean)
+      })
+    } catch (e) {
+      console.warn('[admin] 刷新员工列表失败:', e)
     }
   },
 
@@ -289,7 +309,7 @@ Page({
     const { id } = event.currentTarget.dataset
     try {
       await api.updateEmployeeRole(id, 'admin')
-      await this.onShow()
+      await this._reloadEmployees()
       ui.toast('已设为管理员', 'success')
     } catch (e) {
       ui.handleError(e, '操作失败')
@@ -300,7 +320,7 @@ Page({
     const { id } = event.currentTarget.dataset
     try {
       await api.updateEmployeeRole(id, 'worker')
-      await this.onShow()
+      await this._reloadEmployees()
       ui.toast('已取消管理员权限', 'none')
     } catch (e) {
       ui.handleError(e, '操作失败')
@@ -575,8 +595,8 @@ Page({
 
   onShareAppMessage() {
     return {
-      title: '兴祥机械跟单系统入驻申请',
-      path: this.data.joinInvitePath || '/pages/join/index'
+      title: '兴祥机械跟单系统',
+      path: '/pages/join/index'
     }
   }
 })

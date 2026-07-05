@@ -207,12 +207,8 @@ async function logout() {
 async function submitJoinApplication(payload) {
   return callFunction('auth', { action: 'submitJoinApplication', ...payload })
 }
-async function generateJoinQRCode(force = false) {
-  return callFunction('auth', { action: 'generateJoinQRCode', force })
-}
-async function getJoinQRCodeFileID(force = false) {
-  const r = await generateJoinQRCode(force)
-  return r && r.success ? r : null
+async function checkAccess() {
+  return callFunction('auth', { action: 'checkAccess' }, { noRetry: true })
 }
 
 // =====================================================================
@@ -552,8 +548,7 @@ module.exports = {
   verify,
   logout,
   submitJoinApplication,
-  generateJoinQRCode,
-  getJoinQRCodeFileID,
+  checkAccess,
   // 工单
   getDashboard,
   listOrders,

@@ -43,6 +43,7 @@ async function listEmployees() {
       stations: u.stations || [],
       status: u.status,
       openid: u.openid || '',
+      deviceId: u.deviceId || u.lastDeviceId || '',
       createdAt: u.createdAt
     }))
 
@@ -53,12 +54,28 @@ async function listEmployees() {
       stations: p.stations || [],
       status: 'pending',
       openid: p.openid || '',
+      deviceId: p.deviceId || '',
       inviteSource: p.inviteSource || 'scan',
       inviteNote: p.note || '',
       createdAt: p.createdAt
     }))
 
-    return [...employees, ...pending]
+    // 按 openid / deviceId / name 去重：users 中的记录优先级更高，避免已审批员工和待审申请同时出现
+    const userKeys = new Set()
+    employees.forEach(e => {
+      if (e.openid) userKeys.add(`openid:${e.openid}`)
+      if (e.deviceId) userKeys.add(`deviceId:${e.deviceId}`)
+      if (e.name) userKeys.add(`name:${e.name}`)
+    })
+
+    const filteredPending = pending.filter(p => {
+      if (p.openid && userKeys.has(`openid:${p.openid}`)) return false
+      if (p.deviceId && userKeys.has(`deviceId:${p.deviceId}`)) return false
+      if (p.name && userKeys.has(`name:${p.name}`)) return false
+      return true
+    })
+
+    return [...employees, ...filteredPending]
   } catch (err) {
     if (err.errCode === -502005) return []
     throw err

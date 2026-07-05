@@ -42,8 +42,7 @@ function isMissingCollectionError(err) {
  *   - login: 用 openid 登录或注册（需 openid 和可选的 deviceId）
  *   - verify: 验证 token 有效性
  *   - logout: 清除会话
- *   - createInviteCode: 管理员生成一次性邀请码（需要权限检查）
- *   - submitJoinApplication: 外部用户申请入驻（扫码进入，无需邀请码）
+ *   - submitJoinApplication: 新员工自助申请加入系统
  */
 exports.main = async (event, context) => {
   try {
@@ -73,25 +72,17 @@ exports.main = async (event, context) => {
       case 'verify':
         return await verifyToken(token)
       
+      case 'checkAccess':
+        return await checkAccess({ openid, deviceId, token })
+
       case 'logout':
         return await logout(token)
-      
-      case 'createInviteCode':
-        return await createInviteCode({
-          token: token,
-          expiresIn: safeEvent.expiresIn,
-          maxUses: safeEvent.maxUses
-        })
-
-      case 'generateJoinQRCode':
-        return await generateJoinQRCode({ token: safeEvent.token, force: !!safeEvent.force })
       
       case 'submitJoinApplication':
         return await submitJoinApplication({
           deviceId: deviceId,
           name: safeEvent.name,
-          stations: safeEvent.stations,
-          note: safeEvent.note,
+          stations: safeEvent.stations || [],
           openid: openid
         })
       
@@ -137,7 +128,23 @@ async function login({ openid, deviceId }) {
 
   let user = res.data[0]
   
-  // 如果 openid 匹配不到用户，尝试通过 deviceId 在 pending_applications 中找到已审批的申请
+  // 如果 openid 匹配不到用户，优先通过 deviceId 直接查找 users 中的已激活用户
+  // 适用于 invite 用户审批通过后 pending 记录已被清理的场景
+  if (!user && deviceId) {
+    try {
+      const deviceUserRes = await db.collection('users').where({
+        deviceId: deviceId,
+        status: 'active'
+      }).get()
+      if (deviceUserRes.data.length > 0) {
+        user = deviceUserRes.data[0]
+      }
+    } catch (err) {
+      // 静默处理
+    }
+  }
+
+  // 兜底：兼容尚未清理的 approved pending 记录（含 userId 引用）
   if (!user && deviceId) {
     try {
       const approvedRes = await db.collection('pending_applications').where({
@@ -157,6 +164,7 @@ async function login({ openid, deviceId }) {
       // 静默处理
     }
   }
+
   
   if (!user) {
     // 用户不存在，检查是否通过邀请码申请过
@@ -203,9 +211,10 @@ async function login({ openid, deviceId }) {
 
   // 检查用户是否已被启用
   if (user.status !== 'active') {
+    const isDisabled = user.status === 'disabled'
     return {
       success: true,
-      state: 'pending',
+      state: isDisabled ? 'disabled' : 'pending',
       user: {
         id: user._id,
         name: user.name,
@@ -214,7 +223,9 @@ async function login({ openid, deviceId }) {
         status: user.status
       },
       token: null,
-      message: '账号尚未被管理员审批激活'
+      message: isDisabled
+        ? '您的账号已被管理员移除'
+        : '账号尚未被管理员审批激活'
     }
   }
 
@@ -291,86 +302,108 @@ async function verifyToken(token) {
   }
 }
 
+
+
 /**
- * 生成一次性邀请码（仅管理员）
- * @param {string} token - 管理员 token
- * @param {number} expiresIn - 有效期（秒，默认 86400 = 1 天）
- * @param {number} maxUses - 最多使用次数（0 = 无限制，默认 1 = 仅一次）
+ * 辅助函数：尝试创建缺失的集合（集合已存在时静默忽略）
  */
-async function createInviteCode({ token, expiresIn = 86400, maxUses = 1 }) {
-  const db = getDb()
-  const verified = await verifyToken(token)
-  if (!verified.success || (verified.user.role !== 'admin' && verified.user.role !== 'superadmin')) {
-    return { success: false, error: '仅管理员可创建邀请码' }
-  }
-
-  // 生成邀请码（建议使用随机字符串或 UUID）
-  const inviteCode = generateInviteCode()
-  const expiresAt = new Date(Date.now() + expiresIn * 1000)
-
-  await db.collection('invite_codes').add({
-    data: {
-      code: inviteCode,
-      createdBy: verified.user.id,
-      createdAt: db.serverDate(),
-      expiresAt: expiresAt,
-      maxUses: maxUses,
-      usedCount: 0,
-      isActive: true
+async function ensureCollection(db, name) {
+  try {
+    await db.createCollection(name)
+  } catch (err) {
+    if (!isMissingCollectionError(err)) {
+      console.warn(`[auth] ensureCollection ${name} failed:`, err.message || err)
     }
-  })
-
-  return {
-    success: true,
-    inviteCode: inviteCode,
-    expiresAt: expiresAt.toISOString(),
-    maxUses: maxUses
   }
 }
 
 /**
- * 外部用户申请入驻（扫码进入，无需邀请码）
+ * 员工自助申请加入系统
  * @param {string} deviceId - 设备 ID
  * @param {string} name - 申请人名字
- * @param {string} note - 备注
+ * @param {string[]} stations - 岗位列表（多选）
  */
-async function submitJoinApplication({ deviceId, name, note, openid }) {
+async function submitJoinApplication({ deviceId, name, stations, openid }) {
   const normalizedDeviceId = String(deviceId || '').trim()
   const normalizedName = String(name || '').trim()
-  const normalizedNote = String(note || '').trim()
+  const normalizedStations = (Array.isArray(stations) ? stations : (stations ? [stations] : []))
+    .map(s => String(s).trim())
+    .filter(Boolean)
 
   if (!normalizedDeviceId || !normalizedName) {
     return { success: false, error: '缺少必要字段' }
   }
+  if (normalizedStations.length === 0) {
+    return { success: false, error: '请至少选择一个岗位' }
+  }
 
   const db = getDb()
 
+  // 兜底：如果数据库集合尚未创建，先创建（本地/新环境常见）
+  await ensureCollection(db, 'pending_applications')
+  await ensureCollection(db, 'audit_logs')
+  await ensureCollection(db, 'users')
+
+  // 如果该 openid 已经是活跃员工，直接拒绝重复申请
+  if (openid) {
+    try {
+      const existingUserRes = await db.collection('users').where({ openid }).get()
+      if (existingUserRes && existingUserRes.data.length > 0) {
+        const existingUser = existingUserRes.data[0]
+        if (existingUser.status === 'active') {
+          return { success: false, error: '您已是系统成员，无需重复申请' }
+        }
+        // disabled 用户允许重新申请，此处无需拦截
+      }
+    } catch (err) {
+      if (!isMissingCollectionError(err)) throw err
+    }
+  }
+
+  const applicationData = {
+    deviceId: normalizedDeviceId,
+    openid: openid || '',
+    name: normalizedName,
+    stations: normalizedStations,
+    status: 'pending',
+    createdAt: db.serverDate(),
+    updatedAt: db.serverDate()
+  }
+
+  let existingApp = null
+  try {
+    const existingRes = await db.collection('pending_applications').where({
+      deviceId: normalizedDeviceId
+    }).get()
+    existingApp = existingRes.data[0] || null
+  } catch (err) {
+    if (!isMissingCollectionError(err)) throw err
+  }
+
   // 同一设备的待审批申请直接更新
-  const existingRes = await db.collection('pending_applications').where({
-    deviceId: normalizedDeviceId
-  }).get()
-
-  if (existingRes.data.length > 0) {
-    const existingApp = existingRes.data[0]
-    await db.collection('pending_applications').doc(existingApp._id).update({
-      data: {
-        name: normalizedName,
-        note: normalizedNote,
-        openid: openid || '',
-        status: 'pending',
-        updatedAt: db.serverDate()
+  if (existingApp) {
+    try {
+      await db.collection('pending_applications').doc(existingApp._id).update({
+        data: { ...applicationData, createdAt: existingApp.createdAt }
+      })
+    } catch (err) {
+      return {
+        success: false,
+        error: '更新申请失败：' + (err.message || '数据库异常')
       }
-    })
+    }
 
-    await db.collection('audit_logs').add({
-      data: {
-        action: '更新入驻申请',
-        userId: existingApp._id,
-        userName: normalizedName,
-        deviceId: normalizedDeviceId,
-        timestamp: db.serverDate()
-      }
-    })
+    try {
+      await db.collection('audit_logs').add({
+        data: {
+          action: '更新入驻申请',
+          userId: existingApp._id,
+          userName: normalizedName,
+          deviceId: normalizedDeviceId,
+          timestamp: db.serverDate()
+        }
+      })
+    } catch (e) { /* 非关键：审计日志写入失败不应影响主流程 */ }
 
     return {
       success: true,
@@ -380,29 +413,30 @@ async function submitJoinApplication({ deviceId, name, note, openid }) {
   }
 
   // 新增申请
-  const application = await db.collection('pending_applications').add({
-    data: {
-      deviceId: normalizedDeviceId,
-      openid: openid || '',
-      name: normalizedName,
-      stations: [],
-      note: normalizedNote,
-      status: 'pending',
-      createdAt: db.serverDate(),
-      updatedAt: db.serverDate()
+  let addRes
+  try {
+    addRes = await db.collection('pending_applications').add({
+      data: applicationData
+    })
+  } catch (err) {
+    return {
+      success: false,
+      error: '提交申请失败：' + (err.message || '数据库写入异常')
     }
-  })
+  }
+  const application = { _id: addRes._id, ...applicationData }
 
-  // 记录审计日志
-  await db.collection('audit_logs').add({
-    data: {
-      action: '提交入驻申请',
-      userId: application._id,
-      userName: normalizedName,
-      deviceId: normalizedDeviceId,
-      timestamp: db.serverDate()
-    }
-  })
+  try {
+    await db.collection('audit_logs').add({
+      data: {
+        action: '提交入驻申请',
+        userId: application._id,
+        userName: normalizedName,
+        deviceId: normalizedDeviceId,
+        timestamp: db.serverDate()
+      }
+    })
+  } catch (e) { /* 非关键：审计日志写入失败不应影响主流程 */ }
 
   return {
     success: true,
@@ -451,240 +485,67 @@ function decodeToken(token) {
 }
 
 /**
- * 辅助函数：生成邀请码
+ * 实时检查用户访问权限（轻量级，用于前端轮询）
+ * 仅返回当前状态，不生成新 token，不做写操作
+ * @param {string} openid
+ * @param {string} deviceId
+ * @param {string} token
  */
-function generateInviteCode() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-  let code = 'INV-'
-  for (let i = 0; i < 8; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)]
-  }
-  return code
-}
-
-/**
- * HTTPS GET 辅助函数（获取 access_token）
- */
-function _httpsGet(url) {
-  const https = require('https')
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, res => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        _httpsGet(res.headers.location).then(resolve).catch(reject)
-        return res.resume()
-      }
-      const chunks = []
-      res.on('data', c => chunks.push(c))
-      res.on('end', () => resolve(Buffer.concat(chunks)))
-    })
-    req.on('error', reject)
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')) })
-  })
-}
-
-/**
- * 获取微信 access_token（用于 HTTP 调用 wxacode 接口）
- * 优先级：cloud.getAccessToken() > 环境变量 appid/secret > 返回空
- */
-async function _getAccessToken(cloud) {
-  // 方式1: cloud.getAccessToken()（部分 SDK 版本）
-  if (typeof cloud.getAccessToken === 'function') {
-    try {
-      const t = await cloud.getAccessToken()
-      const token = (t && typeof t === 'string' && t.length > 10) ? t : ((t && t.access_token) ? t.access_token : '')
-      if (token) return token
-    } catch (e) { /* 静默处理 */ }
-  }
-
-  // 方式2: 环境变量 WX_APPID + WX_APPSECRET
-  const appId = process.env.WX_APPID || ''
-  const secret = process.env.WX_APPSECRET || ''
-  if (appId && secret) {
-    try {
-      const tokenUrl = `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(secret)}`
-      const body = JSON.parse((await _httpsGet(tokenUrl)).toString())
-      if (body.access_token) return body.access_token
-    } catch (e) { /* 静默处理 */ }
-  }
-
-  return ''
-}
-
-/**
- * 生成入驻小程序码 — 使用微信官方接口生成真正的小程序码
- */
-async function generateJoinQRCode({ token, force = false }) {
+async function checkAccess({ openid, deviceId, token }) {
   const db = getDb()
-  const cloud = getCloud()
+  let state = 'guest'
+  let user = null
 
-  const verified = await verifyToken(token)
-  if (!verified.success || (verified.user.role !== 'admin' && verified.user.role !== 'superadmin')) {
-    return { success: false, error: '仅管理员可生成入驻二维码' }
-  }
-
-  const DB_QR = 'join_qrcodes'
-
-  // 非强制刷新时，复用已有有效二维码（1天内）
-  if (!force) {
-    try {
-      const existingRes = await db.collection('invite_codes').where({
-        createdBy: verified.user.id, isActive: true, type: 'join_qrcode'
-      }).orderBy('createdAt', 'desc').limit(1).get()
-      if (existingRes.data.length > 0) {
-        const existing = existingRes.data[0]
-        if (existing.expiresAt && new Date(existing.expiresAt) > new Date()) {
-          const qrCheck = await cloud.database().collection(DB_QR).where({ inviteCode: existing.code }).limit(1).get().catch(() => ({ data: [] }))
-          if (qrCheck.data.length > 0) {
-            return { success: true, fileID: qrCheck.data[0].fileID, inviteCode: existing.code, invitePath: `/pages/join/index?invite=${existing.code}` }
+  // 优先通过 token 识别用户（最高效路径）
+  if (token) {
+    const decoded = decodeToken(token)
+    if (decoded && decoded.userId && decoded.expiresAt && Date.now() < decoded.expiresAt) {
+      try {
+        const res = await db.collection('users').doc(decoded.userId).get()
+        if (res && res.data) {
+          const u = res.data
+          if (u.status === 'active') {
+            state = 'active'
+          } else if (u.status === 'disabled') {
+            state = 'disabled'
+          } else {
+            state = 'pending'
           }
+          user = { id: u._id, name: u.name, role: u.role, stations: u.stations || [], status: u.status }
+          return { success: true, state, user }
         }
-      }
-    } catch (e) { /* 集合可能不存在 */ }
+      } catch (e) { /* token 对应的用户可能已被删除 */ }
+    }
   }
 
-  // 创建新邀请码
-  const inviteCode = generateInviteCode()
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
-  await db.collection('invite_codes').add({
-    data: { code: inviteCode, createdBy: verified.user.id, type: 'join_qrcode', createdAt: db.serverDate(), expiresAt, maxUses: 0, usedCount: 0, isActive: true }
-  })
-
-  // ====== 方式A：cloud.openapi（推荐，SDK 原生） ======
-  const envVer = process.env.WX_ENV_VERSION || 'release'
-  try {
-    const result = await cloud.openapi.wxacode.getUnlimited({
-      scene: inviteCode, page: 'pages/join/index', width: 280,
-      autoColor: false, lineColor: { r: 15, g: 118, b: 110 }, isHyaline: false,
-      envVersion: envVer,
-      checkPath: false  // 跳过路径校验，强制生成
-    })
-    if (result && result.buffer && result.buffer.length > 500) {
-      return await _saveAndReturn(cloud, db, DB_QR, inviteCode, verified.user.id, result.buffer)
-    }
-  } catch (errA) { /* 继续尝试其他方式 */ }
-
-  // ====== 方式A2：换用 get（生成普通小程序码，有数量限制但通常更可靠） ======
-  try {
-    const result2 = await cloud.openapi.wxacode.get({
-      path: `pages/join/index?invite=${encodeURIComponent(inviteCode)}`,
-      width: 280,
-      autoColor: false, lineColor: { r: 15, g: 118, b: 110 }, isHyaline: false,
-      envVersion: envVer
-    })
-    if (result2 && result2.buffer && result2.buffer.length > 500) {
-      return await _saveAndReturn(cloud, db, DB_QR, inviteCode, verified.user.id, result2.buffer)
-    }
-  } catch (errA2) { /* 继续尝试其他方式 */ }
-
-  // ====== 方式B：cloud.openApi（大写A，兼容旧版） ======
-  try {
-    if (cloud.openApi && cloud.openApi.wxacode) {
-      const result = await cloud.openApi.wxacode.getUnlimited({
-        scene: inviteCode, page: 'pages/join/index', width: 280,
-        autoColor: false, lineColor: { r: 15, g: 118, b: 110 }, isHyaline: false,
-        envVersion: envVer, checkPath: false
-      })
-      if (result && result.buffer && result.buffer.length > 500) {
-        return await _saveAndReturn(cloud, db, DB_QR, inviteCode, verified.user.id, result.buffer)
+  // 兜底：通过 openid 查找
+  if (openid) {
+    try {
+      const res = await db.collection('users').where({ openid }).get()
+      if (res && res.data.length > 0) {
+        const u = res.data[0]
+        if (u.status === 'active') state = 'active'
+        else if (u.status === 'disabled') state = 'disabled'
+        else state = 'pending'
+        user = { id: u._id, name: u.name, role: u.role, stations: u.stations || [], status: u.status }
+        return { success: true, state, user }
       }
-    }
-  } catch (errB) { /* 继续尝试其他方式 */ }
+    } catch (e) { /* users 集合不存在 */ }
+  }
 
-  // ====== 方式C：HTTP 直接调用微信 API（getUnlimited） ======
-  try {
-    const accessToken = await _getAccessToken(cloud)
-    if (!accessToken) throw new Error('无access_token')
+  // 再兜底：通过 openid 查 pending_applications
+  if (!user && openid) {
+    try {
+      const pendingRes = await db.collection('pending_applications').where({ openid }).get()
+      if (pendingRes && pendingRes.data.length > 0) {
+        state = 'pending'
+        const p = pendingRes.data[0]
+        user = { id: p._id, name: p.name, role: 'pending', stations: p.stations || [], status: 'pending' }
+      }
+    } catch (e) { /* pending_applications 集合不存在 */ }
+  }
 
-    const https = require('https')
-    const postData = JSON.stringify({
-      scene: inviteCode, page: 'pages/join/index', width: 280,
-      auto_color: false, line_color: { r: 15, g: 118, b: 110 }, is_hyaline: false,
-      env_version: envVer, check_path: false
-    })
-
-    const buffer = await new Promise((resolve, reject) => {
-      const u = new URL(`https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token=${encodeURIComponent(accessToken)}`)
-      const req = https.request({
-        hostname: u.hostname, path: u.pathname + u.search, method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }
-      }, res => {
-        const chunks = []
-        res.on('data', c => chunks.push(c))
-        res.on('end', () => {
-          const buf = Buffer.concat(chunks)
-          const ct = (res.headers['content-type'] || '').toLowerCase()
-          if (ct.includes('image') || buf.length > 3000) resolve(buf)
-          else {
-            let msg = buf.toString('utf-8').substring(0, 500)
-            try { const j = JSON.parse(msg); msg = j.errmsg || ('errcode:' + j.errcode) } catch(e) {}
-            reject(new Error('HTTP getUnlimited错误: ' + msg))
-          }
-        })
-      })
-      req.on('error', reject)
-      req.setTimeout(15000, () => { req.destroy(); reject(new Error('HTTP超时')) })
-      req.write(postData); req.end()
-    })
-
-    if (buffer && buffer.length > 500) {
-      return await _saveAndReturn(cloud, db, DB_QR, inviteCode, verified.user.id, buffer)
-    }
-  } catch (errC) { /* 继续尝试其他方式 */ }
-
-  // ====== 方式C2：HTTP 调用 wxacode.get（普通小程序码） ======
-  try {
-    const accessToken = await _getAccessToken(cloud)
-    if (!accessToken) throw new Error('无access_token')
-
-    const https = require('https')
-    const postData2 = JSON.stringify({
-      path: `pages/join/index?invite=${encodeURIComponent(inviteCode)}`,
-      width: 280,
-      auto_color: false, line_color: { r: 15, g: 118, b: 110 }, is_hyaline: false,
-      env_version: envVer
-    })
-
-    const buffer2 = await new Promise((resolve, reject) => {
-      const u2 = new URL(`https://api.weixin.qq.com/wxa/getwxacode?access_token=${encodeURIComponent(accessToken)}`)
-      const req2 = https.request({
-        hostname: u2.hostname, path: u2.pathname + u2.search, method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData2) }
-      }, res2 => {
-        const chunks2 = []
-        res2.on('data', c => chunks2.push(c))
-        res2.on('end', () => {
-          const buf2 = Buffer.concat(chunks2)
-          const ct2 = (res2.headers['content-type'] || '').toLowerCase()
-          if (ct2.includes('image') || buf2.length > 3000) resolve(buf2)
-          else {
-            let msg2 = buf2.toString('utf-8').substring(0, 500)
-            try { const j = JSON.parse(msg2); msg2 = j.errmsg || ('errcode:' + j.errcode) } catch(e) {}
-            reject(new Error('HTTP get错误: ' + msg2))
-          }
-        })
-      })
-      req2.on('error', reject)
-      req2.setTimeout(15000, () => { req2.destroy(); reject(new Error('HTTP超时')) })
-      req2.write(postData2); req2.end()
-    })
-
-    if (buffer2 && buffer2.length > 500) {
-      return await _saveAndReturn(cloud, db, DB_QR, inviteCode, verified.user.id, buffer2)
-    }
-  } catch (errC2) { /* 静默处理 */ }
-
-  return { success: false, error: '无法生成小程序码，请检查云函数配置' }
-}
-
-/** 上传小程序码到云存储并记录 */
-async function _saveAndReturn(cloud, db, DB_QR, inviteCode, userId, buffer) {
-  const cloudPath = `qrcodes/join_${Date.now()}.png`
-  const uploadResult = await cloud.uploadFile({ cloudPath, fileContent: buffer })
-  try { await db.collection(DB_QR).count() } catch(e) { await db.createCollection(DB_QR).catch(() => {}) }
-  await db.collection(DB_QR).add({
-    data: { inviteCode, fileID: uploadResult.fileID, cloudPath, createdBy: userId, createdAt: db.serverDate() }
-  })
-  return { success: true, fileID: uploadResult.fileID, inviteCode, invitePath: `/pages/join/index?invite=${inviteCode}` }
+  return { success: true, state, user: user || null }
 }
 
 /**
