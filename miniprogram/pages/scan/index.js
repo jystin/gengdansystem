@@ -35,17 +35,22 @@ Page({
     this.setData({ orderId: event.detail.value.trim() })
   },
 
-  scanCode() {
+  async scanCode() {
     if (!this.ensureInternalAccess()) return
+    // 隐私合规：扫码也会调用相机
+    const app = getApp()
+    if (!(await app.requirePrivacyAuthorize())) return
     wx.scanCode({
       onlyFromCamera: false,
       success: (result) => {
-        const scannedText = result.result || result.path || ''
-        const inviteCode = this.extractJoinInvite(scannedText)
-        if (inviteCode) { this.openJoinPage(inviteCode); return }
-        const orderId = this.extractOrderId(scannedText)
-        if (!orderId) { ui.toast('未识别到工单号'); return }
-        this.openOrder(orderId)
+        try {
+          const scannedText = result.result || result.path || ''
+          const inviteCode = this.extractJoinInvite(scannedText)
+          if (inviteCode) { this.openJoinPage(inviteCode); return }
+          const orderId = this.extractOrderId(scannedText)
+          if (!orderId) { ui.toast('未识别到工单号'); return }
+          this.openOrder(orderId)
+        } catch (e) { ui.toast('扫码处理异常，请重试') }
       },
       fail: () => { ui.toast('扫码已取消') }
     })
@@ -85,9 +90,11 @@ Page({
     this.openJoinPage(inviteCode)
   },
 
-  openOrder(event) {
+  // 兼容两种调用：模板事件（event 对象）和代码传参（字符串 orderId）
+  openOrder(target) {
     if (!this.ensureInternalAccess()) return
-    const orderId = event.currentTarget.dataset.id
-    wx.navigateTo({ url: `/pages/order-detail/index?id=${orderId}` })
+    const orderId = typeof target === 'string' ? target : (target && target.currentTarget && target.currentTarget.dataset.id)
+    if (!orderId) { ui.toast('工单号无效'); return }
+    wx.navigateTo({ url: `/pages/order-detail/index?id=${encodeURIComponent(orderId)}` })
   }
 })

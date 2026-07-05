@@ -166,6 +166,9 @@
 .order-id {
   font-size: 30rpx;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .meta-row {
@@ -258,7 +261,7 @@
 .empty-hint {
   text-align: center;
   padding: 80rpx 0;
-  color: #94a3b8;
+  color: #64748b;
   font-size: 28rpx;
 }
 

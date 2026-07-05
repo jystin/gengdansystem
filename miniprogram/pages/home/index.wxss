@@ -114,7 +114,7 @@
 
 .metric-arrow {
   font-size: 32rpx;
-  color: #cbd5e1;
+  color: #94a3b8;
   line-height: 1;
   flex-shrink: 0;
   margin-left: 8rpx;
@@ -212,6 +212,9 @@
 .order-id {
   font-size: 28rpx;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .order-meta {
@@ -322,6 +325,13 @@
 .emp-station-tag {
   font-size: 22rpx; padding: 8rpx 18rpx;
   background: #e0f2fe; color: #0369a1; border-radius: 8rpx;
+}
+
+/* 【UI】管理员标签：与工种标签明显区分，使用醒目的琥珀色实心样式 */
+.emp-admin-tag {
+  font-size: 22rpx; padding: 8rpx 18rpx;
+  background: #f59e0b; color: #ffffff;
+  border-radius: 8rpx; font-weight: 700;
 }
 
 .emp-stations-empty {

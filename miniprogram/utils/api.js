@@ -45,13 +45,13 @@ function callFunction(name, data, opts = {}) {
     cache.delete(cacheKey)
   }
 
-  // 2. 合并并发请求
-  if (inflight.has(cacheKey || `${name}:${Date.now()}`)) {
-    return inflight.get(cacheKey || `${name}:${Date.now()}`)
+  // 2. 合并并发请求（仅缓存类请求做去重，其余不做以避免 key 包含 Date.now() 的无效内存占用）
+  if (useCache && cacheKey && inflight.has(cacheKey)) {
+    return inflight.get(cacheKey)
   }
 
   const promise = _invoke(name, payload, useCache, noRetry, cacheKey)
-  if (useCache) {
+  if (useCache && cacheKey) {
     inflight.set(cacheKey, promise)
     promise.finally(() => inflight.delete(cacheKey))
   }
@@ -74,6 +74,7 @@ function _invoke(name, payload, useCache, noRetry, cacheKey) {
         }
         if (useCache && cacheKey) {
           cache.set(cacheKey, { value: result, expire: Date.now() + CACHE_TTL })
+          ensureCacheCleanup() // 【优化】懒启动定时清理
         }
         resolve(result)
       }
@@ -114,20 +115,30 @@ function _invoke(name, payload, useCache, noRetry, cacheKey) {
   })
 }
 
-// 定时清理过期缓存
+// 【优化】懒初始化定时清理：仅在首次写入缓存时启动，缓存为空时停止定时器
 let cleanupTimer = null
-function startCacheCleanup() {
-  if (cleanupTimer) return
-  cleanupTimer = setInterval(() => {
-    const now = Date.now()
-    for (const [k, v] of cache.entries()) {
-      if (v.expire <= now) cache.delete(k)
-    }
-  }, CACHE_CLEANUP_INTERVAL)
+function ensureCacheCleanup() {
+  if (!cleanupTimer) {
+    cleanupTimer = setInterval(() => {
+      const now = Date.now()
+      let anyRemaining = false
+      for (const [k, v] of cache.entries()) {
+        if (v.expire <= now) { cache.delete(k) }
+        else { anyRemaining = true }
+      }
+      // 缓存为空时停止定时器以释放资源
+      if (!anyRemaining) {
+        clearInterval(cleanupTimer)
+        cleanupTimer = null
+      }
+    }, CACHE_CLEANUP_INTERVAL)
+  }
 }
-function clearCache() { cache.clear() }
-
-startCacheCleanup()
+function clearCache() {
+  cache.clear()
+  // 同时清理并发去重映射
+  inflight.clear()
+}
 
 // =====================================================================
 // 常量：与后端 4 处同步（utils/api.js / orderManager / completeStep / init-db）
@@ -365,6 +376,23 @@ async function restoreBackup(backupId, confirm = true) {
 async function deleteBackup(backupId) { return callFunction('backupManager', { action: 'delete', backupId }) }
 
 // =====================================================================
+// 系统镜像点（snapshotManager）
+// =====================================================================
+
+async function createSnapshot() {
+  return callFunction('snapshotManager', { action: 'create' })
+}
+async function listSnapshots() {
+  return callFunction('snapshotManager', { action: 'list' })
+}
+async function restoreSnapshot(snapshotId, confirm = true) {
+  return callFunction('snapshotManager', { action: 'restore', snapshotId, confirm })
+}
+async function deleteSnapshot(snapshotId) {
+  return callFunction('snapshotManager', { action: 'delete', snapshotId })
+}
+
+// =====================================================================
 // 工具
 // =====================================================================
 
@@ -401,16 +429,22 @@ function isOverdue(o) {
 function getEmployeeDisplayStations(emp) {
   if (!emp) return ''
   const list = Array.isArray(emp.stations) ? emp.stations : (emp.station ? [emp.station] : [])
-  return list.join(' / ')
+  // 【UI】隐藏“管理员中心”虚拟岗位，避免与真实工种信息混淆
+  return list.filter(s => s !== '管理员中心').join(' / ')
 }
 
 // 月度表头（用于产量统计导出）
+// 【优化】按年份缓存，同名年份反复调用不重复构建
+const _monthHeadersCache = Object.create(null)
 function buildMonthHeaders(year) {
   const y = year || String(new Date().getFullYear())
-  return Array.from({ length: 12 }, (_, i) => ({
+  if (_monthHeadersCache[y]) return _monthHeadersCache[y]
+  const h = Array.from({ length: 12 }, (_, i) => ({
     key: `${y}-${String(i + 1).padStart(2, '0')}`,
     label: `${i + 1}月`
   }))
+  _monthHeadersCache[y] = h
+  return h
 }
 
 /**
@@ -561,6 +595,11 @@ module.exports = {
   listBackups,
   restoreBackup,
   deleteBackup,
+  // 系统镜像点
+  createSnapshot,
+  listSnapshots,
+  restoreSnapshot,
+  deleteSnapshot,
   // 工具
   getCurrentUserId,
   isCurrentUserAdmin,

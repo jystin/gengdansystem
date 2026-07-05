@@ -49,7 +49,20 @@ Page({
     joinQRFileID: '',
     createForm: emptyCreateForm(),
     inviteForm: emptyInviteForm(),
-    employeePanelOpen: false
+    employeePanelOpen: false,
+    // ===== 系统镜像点 =====
+    snapshots: [],
+    snapshotLabels: [],
+    selectedSnapshotIndex: -1,
+    selectedSnapshotId: '',
+    snapshotSaving: false,
+    snapshotRestoring: false,
+    // 进度条
+    snapshotProgressVisible: false,
+    snapshotProgressPercent: 0,
+    snapshotProgressText: '',
+    snapshotProgressStep: 0,
+    snapshotProgressTotal: 8
   },
 
   async onShow() {
@@ -67,7 +80,7 @@ Page({
     try {
       ui.showLoading('加载中...')
       const [dashboard, orders, employees, logs] = await Promise.all([
-        api.getDashboard(),
+        api.getDashboard().catch(() => null),
         api.listOrders(1, 100).catch(() => []),
         api.listEmployees().catch(() => []),
         api.listLogs(2).catch(() => [])
@@ -75,7 +88,7 @@ Page({
       const cleanedEmployees = (employees || []).map(e => {
         const nameFallback = (currentUser.id && e.id === currentUser.id && currentUser.name)
           ? currentUser.name : '员工'
-        return { ...e, name: api.cleanName(e.name, nameFallback), roleLabel: api.roleLabel(e.role), statusLabel: api.statusLabel(e.status) }
+        return { ...e, name: api.cleanName(e.name, nameFallback), roleLabel: api.roleLabel(e.role), statusLabel: api.statusLabel(e.status), _stationDisplay: api.getEmployeeDisplayStations(e) }
       })
       const pendingEmployees = cleanedEmployees.filter((employee) => employee.status === 'pending')
       let joinInvitePath = ''
@@ -103,6 +116,9 @@ Page({
           roleIndex: Math.min(this.data.inviteForm.roleIndex, roleOptions.length - 1)
         }
       })
+
+      // 后台加载镜像点列表（不阻塞首屏）
+      this._loadSnapshots()
     } catch (e) {
       ui.handleError(e, '加载失败')
     } finally {
@@ -293,6 +309,268 @@ Page({
 
   toggleEmployeePanel() {
     this.setData({ employeePanelOpen: !this.data.employeePanelOpen })
+  },
+
+  // ===== 系统镜像点管理 =====
+
+  /**
+   * 镜像集合列表（与云函数 SNAPSHOT_COLLECTIONS 对应）
+   */
+  _snapshotCollections: [
+    { key: 'orders', label: '工单' },
+    { key: 'inventory', label: '库存' },
+    { key: 'material_logs', label: '材料日志' },
+    { key: 'audit_logs', label: '审计日志' },
+    { key: 'users', label: '用户' },
+    { key: 'processes', label: '工序' },
+    { key: 'invite_codes', label: '邀请码' },
+    { key: 'pending_applications', label: '待审批' }
+  ],
+
+  /**
+   * 后台加载镜像点列表（不阻塞主流程）
+   */
+  async _loadSnapshots() {
+    try {
+      const res = await api.listSnapshots()
+      if (res && res.success && res.snapshots) {
+        const labels = res.snapshots.map(s =>
+          `[${s.type}] ${s.createdAt} · ${s.totalRecords}条 · ${s.operator}`
+        )
+        const prevIndex = this.data.selectedSnapshotIndex
+        this.setData({
+          snapshots: res.snapshots,
+          snapshotLabels: labels,
+          selectedSnapshotIndex: prevIndex < labels.length ? prevIndex : -1,
+          selectedSnapshotId: prevIndex >= 0 && prevIndex < res.snapshots.length
+            ? res.snapshots[prevIndex].snapshotId : ''
+        })
+      }
+    } catch (e) {
+      console.warn('[admin] 加载镜像点列表失败:', e)
+    }
+  },
+
+  /**
+   * 启动进度条动画
+   * @param {string} mode  'save' | 'restore'
+   * @returns {Function} 停止函数，调用后立即跳到 100%
+   */
+  _startProgressAnimation(mode) {
+    const total = this._snapshotCollections.length
+    const collections = this._snapshotCollections
+    let step = 0
+    let stopped = false
+
+    const actionLabel = mode === 'save' ? '正在保存' : '正在恢复'
+    const percentPerStep = Math.floor(98 / total) // 留 2% 给最终完成
+
+    const tick = () => {
+      if (stopped) return
+      if (step >= total) {
+        // 循环到最后一轮，保持等待
+        step = total - 1
+      }
+      const col = collections[step]
+      const percent = Math.min(step * percentPerStep + percentPerStep, 98)
+      this.setData({
+        snapshotProgressPercent: percent,
+        snapshotProgressStep: step + 1,
+        snapshotProgressText: `${actionLabel} ${col.label} 数据… (${step + 1}/${total})`
+      })
+      step++
+    }
+
+    // 立即显示第一帧
+    tick()
+    // 后台定时推进
+    const timer = setInterval(tick, 1800)
+
+    // 返回停止函数
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  },
+
+  /**
+   * 停止进度条（跳至完成态）
+   */
+  _finishProgress(success = true) {
+    this.setData({
+      snapshotProgressPercent: 100,
+      snapshotProgressText: success ? '操作完成' : '操作中断',
+      snapshotProgressStep: this._snapshotCollections.length
+    })
+    // 延迟隐藏进度条
+    setTimeout(() => {
+      this.setData({ snapshotProgressVisible: false })
+    }, 800)
+  },
+
+  /**
+   * 手动保存镜像点
+   */
+  async createSnapshot() {
+    if (this.data.snapshotSaving) return
+    const ok = await ui.confirm(
+      '即将创建当前系统状态的完整镜像点（覆盖全部业务数据），确定继续吗？',
+      '创建镜像点'
+    )
+    if (!ok) return
+
+    this.setData({
+      snapshotSaving: true,
+      snapshotProgressVisible: true,
+      snapshotProgressPercent: 0,
+      snapshotProgressStep: 0,
+      snapshotProgressTotal: this._snapshotCollections.length
+    })
+    const stopProgress = this._startProgressAnimation('save')
+
+    try {
+      const res = await api.createSnapshot()
+      stopProgress()
+      if (res && res.success) {
+        this._finishProgress(true)
+        ui.toast(res.message || '镜像点创建成功', 'success')
+        await this._loadSnapshots()
+      } else {
+        this._finishProgress(false)
+        ui.toast((res && res.error) || '创建失败')
+      }
+    } catch (e) {
+      stopProgress()
+      this._finishProgress(false)
+      ui.handleError(e, '创建镜像点失败')
+    } finally {
+      this.setData({ snapshotSaving: false })
+    }
+  },
+
+  /**
+   * 镜像点选择变更
+   */
+  onSnapshotChange(e) {
+    const index = Number(e.detail.value)
+    const snapshot = this.data.snapshots[index]
+    this.setData({
+      selectedSnapshotIndex: index,
+      selectedSnapshotId: snapshot ? snapshot.snapshotId : ''
+    })
+  },
+
+  /**
+   * 一键恢复至选中镜像点（二次确认 + 进度条）
+   */
+  async restoreSnapshot() {
+    if (!this.data.selectedSnapshotId) {
+      ui.toast('请先选择一个镜像点')
+      return
+    }
+    if (this.data.snapshotRestoring) return
+
+    const snap = this.data.snapshots[this.data.selectedSnapshotIndex]
+    if (!snap) return
+
+    // 第一次确认
+    const ok1 = await ui.confirm(
+      `确认恢复到以下镜像点吗？\n\n` +
+      `时间：${snap.createdAt}\n类型：${snap.type}\n记录数：${snap.totalRecords} 条\n操作人：${snap.operator}\n\n` +
+      `⚠️ 恢复后当前全部数据将被覆盖`,
+      '确认恢复（1/2）'
+    )
+    if (!ok1) return
+
+    // 第二次确认（更强提示）
+    const ok2 = await ui.confirm(
+      `⚠️ 最终确认 ⚠️\n\n` +
+      `此操作将：\n` +
+      `1. 清空当前所有业务数据\n` +
+      `2. 从镜像点 ${snap.snapshotId} 完整恢复\n` +
+      `3. 自动同步云端关联配置与数据\n\n` +
+      `恢复后所有用户需重新登录。\n确定执行吗？`,
+      '最终确认（2/2）'
+    )
+    if (!ok2) return
+
+    this.setData({
+      snapshotRestoring: true,
+      snapshotProgressVisible: true,
+      snapshotProgressPercent: 0,
+      snapshotProgressStep: 0,
+      snapshotProgressTotal: this._snapshotCollections.length
+    })
+    const stopProgress = this._startProgressAnimation('restore')
+
+    try {
+      const res = await api.restoreSnapshot(snap.snapshotId, true)
+      stopProgress()
+      if (res && res.success) {
+        this._finishProgress(true)
+        // ===== 云端数据同步：清除本地缓存并重新加载 =====
+        api.clearCache()
+        ui.toast(res.message || '恢复成功', 'success')
+        setTimeout(() => {
+          this._fullReloadAfterRestore()
+        }, 1500)
+      } else {
+        this._finishProgress(false)
+        ui.toast((res && res.error) || '恢复失败')
+        this.setData({ snapshotRestoring: false })
+      }
+    } catch (e) {
+      stopProgress()
+      this._finishProgress(false)
+      ui.handleError(e, '恢复失败')
+      this.setData({ snapshotRestoring: false })
+    }
+  },
+
+  /**
+   * 恢复后全量重新加载管理页面数据，并同步 app 全局状态
+   */
+  async _fullReloadAfterRestore() {
+    const app = getApp()
+    try {
+      ui.showLoading('同步云端数据...')
+      // 重新鉴权，确保 token / 用户状态同步
+      await app.waitForAccessReady()
+
+      // 全量重新加载管理页面数据
+      const [dashboard, orders, employees, logs] = await Promise.all([
+        api.getDashboard().catch(() => null),
+        api.listOrders(1, 100).catch(() => []),
+        api.listEmployees().catch(() => []),
+        api.listLogs(2).catch(() => [])
+      ])
+      const cleanedEmployees = (employees || []).map(e => {
+        const nameFallback = (app.globalData.currentUser &&
+          app.globalData.currentUser.id === e.id && app.globalData.currentUser.name)
+          ? app.globalData.currentUser.name : '员工'
+        return { ...e, name: api.cleanName(e.name, nameFallback), roleLabel: api.roleLabel(e.role), statusLabel: api.statusLabel(e.status), _stationDisplay: api.getEmployeeDisplayStations(e) }
+      })
+      const pendingEmployees = cleanedEmployees.filter(e => e.status === 'pending')
+      const currentUser = app.globalData.currentUser
+
+      this.setData({
+        currentUser,
+        dashboard: dashboard || {},
+        orders: (orders || []).slice(0, 8),
+        employees: cleanedEmployees,
+        pendingEmployees,
+        logs: (logs || []).slice(0, 12).map(api.normalizeLog).filter(Boolean),
+        snapshotRestoring: false
+      })
+
+      await this._loadSnapshots()
+      ui.toast('云端数据同步完成', 'success')
+    } catch (e) {
+      console.warn('[admin] 恢复后同步失败:', e)
+      this.setData({ snapshotRestoring: false })
+    } finally {
+      ui.hideLoading()
+    }
   },
 
   onShareAppMessage() {

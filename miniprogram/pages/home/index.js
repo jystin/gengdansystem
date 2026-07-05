@@ -1,9 +1,15 @@
 const api = require('../../utils/api')
 const ui = require('../../utils/ui')
-const { exportOrders } = require('../../utils/export-excel')
-const { generateProductionDetailHtml } = require('../../utils/export-excel')
+// 【优化】export-excel 是重量级模块（约 13KB），仅在管理员需要导出时才懒加载
+let _exportExcel = null
+function _getExportExcel() {
+  if (!_exportExcel) _exportExcel = require('../../utils/export-excel')
+  return _exportExcel
+}
 
 Page({
+  _isPageAlive: true,
+
   data: {
     user: { role: '', status: 'active' },
     currentUserRole: '',
@@ -26,25 +32,34 @@ Page({
     prodEmployeeNames: []
   },
 
+  onLoad() { this._isPageAlive = true },
+  onUnload() { this._isPageAlive = false },
+
   async onShow() {
     const app = getApp()
+    // 每次回到首页都刷新鉴权，确保角色/权限与云端一致（节流30秒）
+    const now = Date.now()
+    if (now - (app.globalData._lastAuthSyncTime || 0) >= 30000) {
+      await app.refreshAuthContext()
+    }
     await app.waitForAccessReady()
     if (!app.requireActiveAccess('/pages/scan/index')) {
       return
     }
     const user = app.globalData.currentUser || { role: 'guest', status: 'guest' }
     this.setData({ user, currentUserRole: user.role || '' })
-    this.refresh()
+    await this.refresh()
   },
 
   async refresh() {
     try {
       ui.showLoading('加载中...')
       const [dashboard, orders, logs] = await Promise.all([
-        api.getDashboard(),
+        api.getDashboard().catch(() => null),
         api.listOrders(1, 100).catch(() => []),
         api.listLogs(2).catch(() => [])
       ])
+      if (!this._isPageAlive) return
       this.setData({
         dashboard: dashboard || {},
         orders: (orders || []).slice(0, 4),
@@ -99,13 +114,12 @@ Page({
     }
     try {
       ui.showLoading('加载员工数据...')
-      const [employees, processLib] = await Promise.all([
-        api.listEmployees(),
-        Promise.resolve(api.getProcessLibrary())
-      ])
+      // 【优化】getProcessLibrary() 是同步调用，直接从常量取无需 Promise 包装
+      const processLib = api.getProcessLibrary()
+      const employees = await api.listEmployees()
       const stationMap = {}
       processLib.forEach(p => { stationMap[p.station] = p.name })
-      const allStations = Object.keys(stationMap).map(s => ({ station: s, name: stationMap[s], checked: false }))
+      const allStations = Object.keys(stationMap).filter(s => s !== '管理员中心').map(s => ({ station: s, name: stationMap[s], checked: false }))
 
       const currentUser = getApp().globalData.currentUser || {}
       const empList = (employees || []).map(emp => {
@@ -116,7 +130,7 @@ Page({
         return {
           ...emp,
           name: api.cleanName(emp.name, nameFallback),
-          stations: Array.isArray(emp.stations) ? emp.stations : (emp.station ? [emp.station] : []),
+          stations: (Array.isArray(emp.stations) ? emp.stations : (emp.station ? [emp.station] : [])).filter(s => s !== '管理员中心'),
           _stationDisplay: api.getEmployeeDisplayStations(emp),
           roleLabel: api.roleLabel(emp.role),
           statusLabel: api.statusLabel(emp.status)
@@ -213,12 +227,17 @@ Page({
   // 保存岗位修改
   async saveEmpStations(event) {
     const id = event.currentTarget.dataset.id
-    const newStations = this.data.tempCheckedStations[id] || []
+    const emp = this.data.empList.find(e => e.id === id)
+    let newStations = this.data.tempCheckedStations[id] || []
+    // 【UI】保留“管理员中心”虚拟岗位，避免编辑真实工种时误删管理员标识
+    if (emp && (emp.role === 'admin' || emp.role === 'superadmin') && !newStations.includes('管理员中心')) {
+      newStations = ['管理员中心', ...newStations]
+    }
     try {
       await api.updateEmployeeStations(id, newStations)
-      // 更新本地列表显示
+      // 更新本地列表显示，保持前端隐藏“管理员中心”
       const empList = this.data.empList.map(e =>
-        e.id === id ? { ...e, stations: newStations, _stationDisplay: api.getEmployeeDisplayStations({ ...e, stations: newStations }) } : e
+        e.id === id ? { ...e, stations: newStations.filter(s => s !== '管理员中心'), _stationDisplay: api.getEmployeeDisplayStations({ ...e, stations: newStations }) } : e
       )
       this.setData({ empList, editingEmpId: '', allStations: this._buildAllStations([]) })
       ui.toast('岗位已保存', 'success')
@@ -320,7 +339,7 @@ Page({
         ui.toast('暂无数据')
         return
       }
-      const content = generateProductionDetailHtml(rows, null, this.data.prodYear)
+      const content = _getExportExcel().generateProductionDetailHtml(rows, null, this.data.prodYear)
       this._doExportFile(content, `员工月度报表_全部_${this.data.prodYear}`)
     } catch (e) {
       ui.handleError(e, '导出失败')
@@ -344,7 +363,7 @@ Page({
         ui.toast('该员工暂无记录')
         return
       }
-      const content = generateProductionDetailHtml(rows, emp, prodYear)
+      const content = _getExportExcel().generateProductionDetailHtml(rows, emp, prodYear)
       this._doExportFile(content, `员工月度报表_${empName}_${prodYear}`)
     } catch (e) {
       ui.handleError(e, '导出失败')

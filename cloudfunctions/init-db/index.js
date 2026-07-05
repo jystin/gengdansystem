@@ -1,13 +1,11 @@
 /**
- * 数据库初始化示例
- * 用于微信云开发数据库迁移演示数据到生产环境
- * 
- * 使用方式：
- * 1. 在微信云开发控制台的"云函数"中创建函数 "init-db"
- * 2. 复制此代码到云函数编辑器
- * 3. 调用：wx.cloud.callFunction({ name: 'init-db', data: { adminOpenid: '你的openid' } })
- * 
- * 注意：此函数应仅在部署时调用一次，之后应删除或禁用
+ * 数据库初始化
+ * 仅首次部署时调用，执行后自动标记为已完成
+ *
+ * 调用方式：
+ *   wx.cloud.callFunction({ name: 'init-db', data: { adminOpenid: '你的openid' } })
+ *
+ * 安全机制：写入 _system_config 标记防止重复执行
  */
 
 const cloud = require('wx-server-sdk')
@@ -17,6 +15,32 @@ cloud.init({
 })
 
 const db = cloud.database()
+
+// 首次执行前检查是否已完成初始化
+async function checkIfAlreadyInitialized() {
+  try {
+    const cfg = await db.collection('_system_config').doc('init_db_done').get()
+    if (cfg && cfg.data && cfg.data.done) {
+      return true
+    }
+  } catch (_) { /* 集合或记录不存在，可以继续 */ }
+  return false
+}
+
+async function markAsInitialized() {
+  try {
+    await db.collection('_system_config').add({
+      data: { _id: 'init_db_done', done: true, completedAt: db.serverDate() }
+    })
+  } catch (_) {
+    // 记录已存在，尝试更新
+    try {
+      await db.collection('_system_config').doc('init_db_done').update({
+        data: { done: true, completedAt: db.serverDate() }
+      })
+    } catch (_) { /* 忽略 */ }
+  }
+}
 
 function isMissingCollectionError(err) {
   if (!err) return false
@@ -85,6 +109,14 @@ async function ensureCollection(collectionName) {
 }
 
 exports.main = async (event, context) => {
+  // 安全机制：检查是否已初始化，防止重复执行污染数据
+  if (!event.force) {
+    const alreadyDone = await checkIfAlreadyInitialized()
+    if (alreadyDone) {
+      return { success: false, error: '数据库已初始化，若需强制重新初始化请传入 force: true' }
+    }
+  }
+
   const { adminOpenid, adminName = '江鑫（超管）', resetInventory } = event || {}
   const wxContext = cloud.getWXContext()
   const resolvedAdminOpenid = adminOpenid || wxContext.OPENID
@@ -98,7 +130,7 @@ exports.main = async (event, context) => {
 
   try {
     // 第零步：确保所需集合存在
-    const requiredCollections = ['processes', 'users', 'inventory', 'audit_logs', 'orders', 'material_logs', 'pending_applications', 'invite_codes', 'backups', 'daily_counters', 'join_qrcodes']
+    const requiredCollections = ['processes', 'users', 'inventory', 'audit_logs', 'orders', 'material_logs', 'pending_applications', 'invite_codes', 'backups', 'daily_counters', 'join_qrcodes', 'snapshots', 'system_config']
     const failedCollections = []
     for (const col of requiredCollections) {
       const ok = await ensureCollection(col)
@@ -203,6 +235,9 @@ exports.main = async (event, context) => {
 
     // 第四步：初始化审计日志（可选）
     const existingLogs = await safeCount('audit_logs')
+
+    // 标记初始化完成，防止重复执行
+    await markAsInitialized()
 
     // 返回初始化报告
     return {

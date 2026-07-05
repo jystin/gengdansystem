@@ -22,16 +22,116 @@ App({
     accessReady: false,
     authReadyPromise: null,
     isNetworkConnected: true,
-    systemInfo: null
+    systemInfo: null,
+    _lastAuthSyncTime: 0,     // 上次鉴权同步时间戳，用于 onShow 节流
+
+    // ===== 隐私 API 授权配置 =====
+    // 设为 true   → 启用完整的微信隐私 API 作用域检查（上线前需要在微信后台配置隐私协议）
+    // 设为 false  → 开发阶段跳过所有隐私检查，chooseMedia/chooseImage 直接可用
+    privacyCheckEnabled: false
   },
 
   async onLaunch() {
+    // 【优化】云初始化是启动必要条件，同步等待；其余非阻塞操作异步启动
     this.initCloud()
-    this.setupErrorMonitoring()
-    this.initSystemInfo()
+    // 【优化】错误监控、系统信息和隐私授权非首屏必需，延迟到下一微任务执行
+    setTimeout(() => {
+      this.setupErrorMonitoring()
+      this.initSystemInfo()
+      this.setupPrivacyAuthorization()
+    }, 0)
     this.ensureDeviceId()
     // 同步启动鉴权流程（不 await，让首次进入 home 时也能被 waitForAccessReady 捕获）
     this.startAuthFlow()
+  },
+
+  /**
+   * 隐私合规配置（微信 2023.09+ 要求）
+   * 使用相机/相册前必须先弹出隐私协议弹窗并获得用户同意
+   * 受 globalData.privacyCheckEnabled 控制
+   */
+  setupPrivacyAuthorization() {
+    if (!this.globalData.privacyCheckEnabled) return
+    if (typeof wx.onNeedPrivacyAuthorization !== 'function') return
+    const privacyContractName = '兴祥机械跟单系统隐私保护指引'
+    wx.onNeedPrivacyAuthorization((resolve) => {
+      wx.showModal({
+        title: '隐私权限说明',
+        content: `为了帮您上传工单图纸，${privacyContractName}需要获取您的相机和相册权限。\n\n• 相机：用于拍摄工单图纸照片\n• 相册：用于从相册中选择图纸图片\n\n您的图片仅用于业务流转，不会用于其他用途。点击"同意"即表示您已阅读并同意《${privacyContractName}》。`,
+        confirmText: '同意',
+        cancelText: '拒绝',
+        success: (res) => {
+          if (res.confirm) {
+            resolve({ event: 'agree', buttonId: 'agree' })
+          } else {
+            resolve({ event: 'disagree' })
+          }
+        }
+      })
+    })
+  },
+
+  /**
+   * 请求隐私授权（调用隐私敏感 API 前必须调用）
+   *
+   * 配置项：this.globalData.privacyCheckEnabled
+   *   false（默认）→ 开发阶段，直接放行，不触发任何隐私检查
+   *   true        → 上线阶段，执行完整微信隐私 API 作用域校验
+   *                  上线前必须在微信后台「设置 → 服务内容声明 → 用户隐私保护指引」
+   *                  中勾选 chooseMedia/chooseImage 对应的作用域
+   *
+   * @returns {Promise<boolean>} 是否可继续
+   */
+  async requirePrivacyAuthorize() {
+    // 配置开关：关闭时跳过所有隐私检查，直接放行
+    if (!this.globalData.privacyCheckEnabled) return true
+
+    if (typeof wx.getPrivacySetting !== 'function') return true
+    if (typeof wx.requirePrivacyAuthorize !== 'function') return true
+    try {
+      const setting = await wx.getPrivacySetting()
+      if (!setting || !setting.needAuthorization) return true
+      // 10 秒超时兜底：部分环境隐私 API 可能无响应，避免按钮卡死
+      await Promise.race([
+        wx.requirePrivacyAuthorize(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('PRIVACY_TIMEOUT')), 10000))
+      ])
+      return true
+    } catch (e) {
+      // 开发工具未配置隐私协议时，隐私 API 会报错或超时，此时降级放行便于调试；
+      // 真机用户拒绝时，按合规要求阻止后续操作。
+      try {
+        const sys = wx.getSystemInfoSync()
+        if (sys && sys.platform === 'devtools') {
+          return true
+        }
+      } catch (err) { /* ignore */ }
+      wx.showToast({ title: '需要您同意隐私权限后才能使用', icon: 'none', duration: 2000 })
+      return false
+    }
+  },
+
+  /**
+   * 小程序从后台回到前台时，自动刷新鉴权状态
+   * （解决管理员在后台提升员工权限后，员工不重启就拿到旧角色的问题）
+   * 节流：30 秒内不重复刷新
+   */
+  onShow() {
+    const now = Date.now()
+    if (now - this.globalData._lastAuthSyncTime < 30000) return
+    this.refreshAuthContext()
+  },
+
+  /**
+   * 强制刷新鉴权上下文（重新调用 auth/login，获取最新角色/权限）
+   * 适用于：管理员权限变更后、角色切换等场景
+   */
+  async refreshAuthContext() {
+    this.globalData._lastAuthSyncTime = Date.now()
+    // 重置鉴权 Promise，使下一次 waitForAccessReady 等待新的同步结果
+    this.globalData.accessReady = false
+    this.globalData.authReadyPromise = null
+    await this.startAuthFlow()
   },
 
   /**
@@ -77,18 +177,37 @@ App({
   },
 
   /**
-   * 系统信息
+   * 系统信息（使用新API替代已废弃的 wx.getSystemInfoSync）
    */
   initSystemInfo() {
     try {
-      this.globalData.systemInfo = wx.getSystemInfoSync()
+      const deviceInfo = wx.getDeviceInfo ? wx.getDeviceInfo() : {}
+      const windowInfo = wx.getWindowInfo ? wx.getWindowInfo() : {}
+      const appBaseInfo = wx.getAppBaseInfo ? wx.getAppBaseInfo() : {}
+      this.globalData.systemInfo = {
+        ...deviceInfo,
+        ...windowInfo,
+        ...appBaseInfo,
+        platform: deviceInfo.platform || appBaseInfo.platform || '',
+        model: deviceInfo.model || '',
+        pixelRatio: deviceInfo.pixelRatio || 1,
+        windowWidth: windowInfo.windowWidth || 375,
+        windowHeight: windowInfo.windowHeight || 667,
+        statusBarHeight: windowInfo.statusBarHeight || 20,
+        safeArea: windowInfo.safeArea || null,
+        screenWidth: windowInfo.screenWidth || 375,
+        screenHeight: windowInfo.screenHeight || 667,
+        SDKVersion: appBaseInfo.SDKVersion || '',
+        version: appBaseInfo.version || '',
+        language: appBaseInfo.language || 'zh_CN'
+      }
     } catch (e) { /* ignore */ }
     // 网络状态
     wx.onNetworkStatusChange && wx.onNetworkStatusChange((res) => {
       this.globalData.isNetworkConnected = !!res.isConnected
     })
     try {
-      const net = wx.getNetworkType({
+      wx.getNetworkType({
         success: (res) => { this.globalData.isNetworkConnected = !!res.networkType && res.networkType !== 'none' }
       })
     } catch (e) { /* ignore */ }
@@ -139,16 +258,13 @@ App({
     try {
       const api = require('./utils/api')
       const res = await api.login(deviceId)
-      console.log('[login] response:', JSON.stringify(res))
       if (res && res.state) {
         const user = res.user || null
-        // 兜底：英文名字 / 缺省名字统一规范为中文
+        // 英文名兜底：超管显示中文名
         if (user && user.role === 'superadmin') {
           if (!user.name || /^[A-Za-z\s]+$/.test(user.name) || /admin/i.test(user.name)) {
             user.name = '江鑫（超管）'
           }
-        } else if (user && (!user.name || /^[A-Za-z\s]+$/.test(user.name))) {
-          // 其他英文名字 fallback：保留原值但加备注（在 profile 等页面展示）
         }
         this.globalData.currentUser = user
         this.globalData.accessState = res.state
@@ -187,11 +303,6 @@ App({
    * @returns {boolean} 是否通过
    */
   requireActiveAccess(redirectUrl) {
-    // 调试日志：发布前可删除
-    if (!this._dbgLogged) {
-      console.log('[access] state=', this.globalData.accessState, 'user=', this.globalData.currentUser)
-      this._dbgLogged = true
-    }
     if (this.globalData.accessState === 'active' && this.globalData.currentUser) {
       return true
     }

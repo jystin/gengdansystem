@@ -96,14 +96,14 @@ async function createAutoBackup() {
 
   await db.collection('backups').add({ data: backupDoc })
 
-  // 自动清理旧备份
+  // 自动清理旧备份（并行删除）
   try {
     const allBackups = await db.collection('backups').orderBy('createdAt', 'desc').get()
     if (allBackups.data.length > MAX_BACKUPS) {
       const toDelete = allBackups.data.slice(MAX_BACKUPS)
-      for (const doc of toDelete) {
-        await db.collection('backups').doc(doc._id).remove()
-      }
+      await Promise.allSettled(
+        toDelete.map(doc => db.collection('backups').doc(doc._id).remove().catch(() => {}))
+      )
     }
   } catch (e) { /* 非关键 */ }
 

@@ -412,8 +412,11 @@ async function submitJoinApplication({ deviceId, name, note, openid }) {
 }
 
 const crypto = require('crypto')
-// 生产环境请在云函数环境变量中配置 TOKEN_SECRET，此处为开发默认值
-const TOKEN_SECRET = process.env.TOKEN_SECRET || 'xingxiang_machinery_tracking_secret_2026_salt'
+// 生产环境务必在云函数环境变量中配置 TOKEN_SECRET，此处为兜底默认值
+const TOKEN_SECRET = process.env.TOKEN_SECRET || (() => {
+  console.error('[auth] 警告：未配置 TOKEN_SECRET 环境变量，使用随机令牌，重启后所有已登录用户需重新登录')
+  return require('crypto').randomBytes(32).toString('hex')
+})()
 
 /**
  * 辅助函数：生成带 HMAC 签名的 token
@@ -547,11 +550,12 @@ async function generateJoinQRCode({ token, force = false }) {
   })
 
   // ====== 方式A：cloud.openapi（推荐，SDK 原生） ======
+  const envVer = process.env.WX_ENV_VERSION || 'release'
   try {
     const result = await cloud.openapi.wxacode.getUnlimited({
       scene: inviteCode, page: 'pages/join/index', width: 280,
       autoColor: false, lineColor: { r: 15, g: 118, b: 110 }, isHyaline: false,
-      envVersion: 'develop',
+      envVersion: envVer,
       checkPath: false  // 跳过路径校验，强制生成
     })
     if (result && result.buffer && result.buffer.length > 500) {
@@ -565,7 +569,7 @@ async function generateJoinQRCode({ token, force = false }) {
       path: `pages/join/index?invite=${encodeURIComponent(inviteCode)}`,
       width: 280,
       autoColor: false, lineColor: { r: 15, g: 118, b: 110 }, isHyaline: false,
-      envVersion: 'develop'
+      envVersion: envVer
     })
     if (result2 && result2.buffer && result2.buffer.length > 500) {
       return await _saveAndReturn(cloud, db, DB_QR, inviteCode, verified.user.id, result2.buffer)
@@ -578,7 +582,7 @@ async function generateJoinQRCode({ token, force = false }) {
       const result = await cloud.openApi.wxacode.getUnlimited({
         scene: inviteCode, page: 'pages/join/index', width: 280,
         autoColor: false, lineColor: { r: 15, g: 118, b: 110 }, isHyaline: false,
-        envVersion: 'develop', checkPath: false
+        envVersion: envVer, checkPath: false
       })
       if (result && result.buffer && result.buffer.length > 500) {
         return await _saveAndReturn(cloud, db, DB_QR, inviteCode, verified.user.id, result.buffer)
@@ -595,7 +599,7 @@ async function generateJoinQRCode({ token, force = false }) {
     const postData = JSON.stringify({
       scene: inviteCode, page: 'pages/join/index', width: 280,
       auto_color: false, line_color: { r: 15, g: 118, b: 110 }, is_hyaline: false,
-      env_version: 'develop', check_path: false
+      env_version: envVer, check_path: false
     })
 
     const buffer = await new Promise((resolve, reject) => {
@@ -637,7 +641,7 @@ async function generateJoinQRCode({ token, force = false }) {
       path: `pages/join/index?invite=${encodeURIComponent(inviteCode)}`,
       width: 280,
       auto_color: false, line_color: { r: 15, g: 118, b: 110 }, is_hyaline: false,
-      env_version: 'develop'
+      env_version: envVer
     })
 
     const buffer2 = await new Promise((resolve, reject) => {

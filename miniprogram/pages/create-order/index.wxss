@@ -233,7 +233,7 @@
 .empty-hint {
   padding: 20rpx;
   text-align: center;
-  color: #94a3b8;
+  color: #64748b;
   font-size: 24rpx;
 }
 

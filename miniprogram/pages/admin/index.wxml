@@ -97,7 +97,7 @@
         <view class="row">
           <view>
             <view class="person-name">{{item.name}}</view>
-            <view class="subtle">{{item.stations ? item.stations.join('、') : item.station}} · {{item.inviteSource || 'admin'}} · {{item.inviteNote || '无备注'}}</view>
+            <view class="subtle">{{item._stationDisplay || '未分配岗位'}} · {{item.inviteSource || 'admin'}} · {{item.inviteNote || '无备注'}}</view>
           </view>
           <text class="badge badge-warning">待审批</text>
         </view>
@@ -124,7 +124,7 @@
           <view class="row">
             <view>
               <view class="person-name">{{item.name}}</view>
-              <view class="subtle">{{item.stations ? item.stations.join('、') : item.station}} · {{item.roleLabel || '员工'}} · {{item.statusLabel || '待审批'}}</view>
+              <view class="subtle">{{item._stationDisplay || '未分配岗位'}} · {{item.roleLabel || '员工'}} · {{item.statusLabel || '待审批'}}</view>
             </view>
             <text class="badge {{item.status === 'active' ? 'badge-success' : 'badge-warning'}}">{{item.statusLabel || '待审批'}}</text>
           </view>
@@ -155,6 +155,62 @@
         <view class="subtle">{{item.target}} · {{item.operator}}</view>
       </view>
     </block>
+  </view>
+
+  <view wx:if="{{currentUser.role === 'superadmin'}}" class="section card snapshot-section">
+    <view class="section-head">
+      <view>
+        <view class="section-title">🖴 系统镜像点</view>
+        <view class="subtle">每 8 小时自动创建，保留最近 10 个。恢复后会自动同步云端数据</view>
+      </view>
+    </view>
+
+    <view class="snapshot-controls">
+      <view class="snapshot-row">
+        <picker
+          mode="selector"
+          range="{{snapshotLabels}}"
+          value="{{selectedSnapshotIndex}}"
+          bindchange="onSnapshotChange"
+          class="snapshot-picker"
+        >
+          <view class="picker snapshot-select {{selectedSnapshotIndex < 0 ? 'snapshot-placeholder' : ''}}">
+            {{selectedSnapshotIndex >= 0 ? snapshotLabels[selectedSnapshotIndex] : '请选择要恢复的镜像点'}}
+          </view>
+        </picker>
+        <text class="snapshot-count">{{snapshots.length}}/10</text>
+      </view>
+
+      <view class="snapshot-actions">
+        <button
+          class="mini-btn ghost snapshot-create-btn"
+          bindtap="createSnapshot"
+          loading="{{snapshotSaving}}"
+          disabled="{{snapshotSaving || snapshotRestoring}}"
+        >保存镜像点</button>
+        <button
+          class="mini-btn danger snapshot-restore-btn"
+          bindtap="restoreSnapshot"
+          loading="{{snapshotRestoring}}"
+          disabled="{{selectedSnapshotIndex < 0 || snapshotSaving || snapshotRestoring}}"
+        >恢复到此镜像点</button>
+      </view>
+
+      <!-- 进度条 -->
+      <view wx:if="{{snapshotProgressVisible}}" class="snapshot-progress-wrap">
+        <view class="snapshot-progress-bar">
+          <view class="snapshot-progress-fill" style="width: {{snapshotProgressPercent}}%;"></view>
+        </view>
+        <view class="snapshot-progress-info">
+          <text class="snapshot-progress-text">{{snapshotProgressText}}</text>
+          <text class="snapshot-progress-pct">{{snapshotProgressPercent}}%</text>
+        </view>
+      </view>
+
+      <view wx:if="{{snapshots.length === 0}}" class="snapshot-empty">
+        <text class="subtle">暂无镜像点，点击"保存镜像点"手动创建</text>
+      </view>
+    </view>
   </view>
 </view>
 

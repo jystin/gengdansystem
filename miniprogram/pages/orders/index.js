@@ -85,9 +85,13 @@ Page({
   },
 
   onKeywordInput(event) {
+    // 防抖300ms，减少频繁过滤的性能开销
     const keyword = event.detail.value.trim()
     this.setData({ keyword })
-    this._applyCurrentFilter()
+    if (this._keywordTimer) clearTimeout(this._keywordTimer)
+    this._keywordTimer = setTimeout(() => {
+      this._applyCurrentFilter()
+    }, 300)
   },
 
   onCategoryTap(event) {

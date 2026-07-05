@@ -45,14 +45,18 @@ async function getTypes() {
   }
 }
 
-// 获取材料库存列表
+// 获取材料库存列表（一次查询获取完整数据，避免 getTypes 重复查询）
 async function getInventory() {
   try {
     const res = await db.collection('inventory').get()
     const invMap = {}
-    res.data.forEach(item => { invMap[item.name] = item.stock || {} })
+    const allNames = new Set(MATERIAL_TYPES)
+    res.data.forEach(item => { 
+      invMap[item.name] = item.stock || {}
+      if (item.name) allNames.add(item.name)
+    })
+    const types = [...allNames].sort()
 
-    const types = await getTypes()
     return types.map(name => {
       const roughnessMap = invMap[name] || {}
       const threshold = MATERIAL_LOW_THRESHOLDS[name] || 0
@@ -222,9 +226,10 @@ async function setStock(material, newStock, user, note, roughness) {
     await db.collection('inventory').add({ data: { name: material, stock, lastUpdatedAt: db.serverDate(), createdAt: db.serverDate() } })
   } else {
     const inv = invRes.data[0]
-    const stock = inv.stock || {}
-    stock[rKey] = Number(newStock)
-    await db.collection('inventory').doc(inv._id).update({ data: { stock, lastUpdatedAt: db.serverDate() } })
+    // 使用字段级原子更新，避免并发覆盖整个 stock 对象
+    await db.collection('inventory').doc(inv._id).update({
+      data: { [`stock.${rKey}`]: Number(newStock), lastUpdatedAt: db.serverDate() }
+    })
   }
 
   try {

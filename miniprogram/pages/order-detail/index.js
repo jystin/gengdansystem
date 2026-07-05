@@ -1,6 +1,15 @@
 const api = require('../../utils/api')
 const ui = require('../../utils/ui')
 const { buildQrUrl } = require('../../utils/qr-url')
+// 【优化】buildQrUrl 结果按 text 缓存，同一 orderId 多次 setData 不再重复生成
+const _qrUrlCache = Object.create(null)
+function cachedQrUrl(text, size) {
+  const key = `${text}_${size}`
+  if (!_qrUrlCache[key]) {
+    _qrUrlCache[key] = buildQrUrl(text, size)
+  }
+  return _qrUrlCache[key]
+}
 
 Page({
   data: {
@@ -21,7 +30,14 @@ Page({
     operatorLabel: '请选择操作员',
     activeEmployees: [],
     showOperatorPicker: false,
-    operatorSearchKeyword: ''
+    operatorSearchKeyword: '',
+    pendingDrawings: [],
+    drawingUrls: [],
+    drawingCount: 0,
+    hasDrawings: false,
+    hasPending: false,
+    // 前端状态：是否正在后台补充加载（用于 UI 展示骨架屏/弱提示）
+    isLoadingMore: false
   },
 
   async onLoad(options) {
@@ -31,7 +47,7 @@ Page({
       return
     }
     this.orderId = options.id
-    await this.refresh()
+    await this.refresh({ force: true })
   },
 
   goToHome() {
@@ -39,36 +55,96 @@ Page({
   },
 
   async onShow() {
-    if (this._inputFocusing) return
+    // 节流：3 秒内已刷新过则不重复刷新，避免从后台切回/页面跳转时反复请求
+    if (this._lastRefreshAt && Date.now() - this._lastRefreshAt < 3000) return
+    if (this._inputFocusing || this.data.hasPending) return
     await this.refresh()
   },
 
-  async refresh() {
+  /**
+   * 刷新工单详情
+   * @param {Object} opts
+   * @param {boolean} opts.force 是否强制刷新（忽略节流）
+   *
+   * 分阶段加载策略：
+   *   1. 首屏优先：只拿工单主数据，立即 setData 渲染核心 UI
+   *   2. 后台补齐：并行加载 materialTypes / employees / drawing URLs
+   *   3. 下料计算：仅在当前是下料工序时，异步计算重量/库存
+   * 这样用户能最快看到工单主体，避免等待所有接口串行完成。
+   */
+  async refresh(opts = {}) {
     const app = getApp()
     await app.waitForAccessReady()
     if (!app.requireActiveAccess('/pages/scan/index')) return
     if (!this.orderId) return
 
+    // 节流保护（非强制刷新时）
+    if (!opts.force && this._lastRefreshAt && Date.now() - this._lastRefreshAt < 3000) return
+
+    this._lastRefreshAt = Date.now()
+    if (this._refreshing) return
+    this._refreshing = true
+
     try {
       ui.showLoading('加载中...')
-      const [order, materialTypes, employees] = await Promise.all([
-        api.getOrder(this.orderId),
-        api.getMaterialTypes(),
-        api.listEmployees()
-      ])
+
+      // ===== Phase 1: 首屏核心数据（只请求工单，最快渲染）=====
+      const order = await api.getOrder(this.orderId)
 
       if (!order) {
-        ui.hideLoading()
+        ui.resetLoading()
         ui.toast('工单不存在')
+        this.setData({ order: null })
         return
       }
 
       const user = app.globalData.currentUser
-      const isAdmin = user.role === 'admin' || user.role === 'superadmin'
-      const _stations = user.stations || (user.station ? [user.station] : [])
-      const canComplete = order.status !== 'completed' && (isAdmin || _stations.includes(order.currentStation))
-      const currentStep = order.steps && order.steps[order.currentStepIndex]
-      const isBlankingStep = currentStep && currentStep.key === 'blanking'
+      const { isAdmin, canComplete, isBlankingStep, autoLength } = this._computeAccessState(user, order)
+
+      // 清理工单 history 中的操作员英文名
+      if (order.history && Array.isArray(order.history)) {
+        order.history = order.history.map(h => ({
+          ...h,
+          operator: api.cleanName(h.operator, '操作员')
+        }))
+      }
+
+      let mcUpdate = null
+      if (isBlankingStep) {
+        const prevMc = this.data.materialConsumption || {}
+        mcUpdate = {
+          material: prevMc.material || '',
+          roughness: prevMc.roughness || '',
+          length: prevMc.length || autoLength,
+          qty: prevMc.qty || ''
+        }
+      }
+
+      // 先渲染首屏，让用户立刻看到工单主体
+      this.setData({
+        order: {
+          ...order,
+          qrUrl: cachedQrUrl(order.qrContent || order.id, 320)
+        },
+        currentUser: user,
+        selectedSteps: order.steps || [],
+        selectedStepKeys: (order.steps || []).map(s => s.key),
+        isAdmin,
+        canComplete,
+        isBlankingStep,
+        drawingCount: (order.drawings || []).length + (this.data.pendingDrawings || []).length,
+        hasDrawings: (order.drawings || []).length + (this.data.pendingDrawings || []).length > 0,
+        ...(mcUpdate ? { materialConsumption: mcUpdate } : {})
+      })
+      ui.hideLoading()
+
+      // ===== Phase 2: 后台并行加载参考数据（员工、材料类型）和图纸 URL =====
+      this.setData({ isLoadingMore: true })
+      const [materialTypes, employees] = await Promise.all([
+        api.getMaterialTypes(),
+        api.listEmployees()
+      ])
+
 
       const activeEmployees = (employees || [])
         .filter(e => e.status === 'active' && e.role !== 'superadmin')
@@ -84,77 +160,65 @@ Page({
         defaultOperatorLabel = first.name + (api.getEmployeeDisplayStations(first) ? ` · ${api.getEmployeeDisplayStations(first)}` : '')
       }
 
-      const autoLength = (isBlankingStep && order.drawingDetail && order.drawingDetail.length) ? order.drawingDetail.length : ''
-
-      let mcUpdate = null
-      if (isBlankingStep) {
-        const prevMc = this.data.materialConsumption || {}
-        mcUpdate = {
-          material: prevMc.material || '',
-          roughness: prevMc.roughness || '',
-          length: prevMc.length || autoLength,
-          qty: prevMc.qty || ''
-        }
-      }
-
-      // 清理工单 history 中的操作员英文名
-      if (order.history && Array.isArray(order.history)) {
-        order.history = order.history.map(h => ({
-          ...h,
-          operator: api.cleanName(h.operator, '操作员')
-        }))
-      }
-
-      // 处理 drawings 中云存储 fileID → 临时可访问 URL
-      const drawingUrls = []
-      if (Array.isArray(order.drawings)) {
-        for (const d of order.drawings) {
-          if (d.fileID) {
-            try {
-              const t = await wx.cloud.getTempFileURL({ fileList: [d.fileID] })
-              if (t && t.fileList && t.fileList[0] && t.fileList[0].tempFileURL) {
-                drawingUrls.push(t.fileList[0].tempFileURL)
-              }
-            } catch (e) { /* ignore */ }
-          } else if (d.tempFilePath) {
-            drawingUrls.push(d.tempFilePath)
-          }
-        }
-      }
+      // 图纸 URL 改为懒加载：先让首屏出来，再异步换临时链接
+      const drawingUrls = await this._resolveDrawingUrls(order.drawings || [])
+      const pendingLen = (this.data.pendingDrawings || []).length
+      const drawingCount = drawingUrls.length + pendingLen
 
       this.setData({
-        order: {
-          ...order,
-          qrUrl: buildQrUrl(order.qrContent || order.id, 320)
-        },
-        currentUser: user,
-        selectedSteps: order.steps || [],
-        selectedStepKeys: (order.steps || []).map(s => s.key),
-        drawingUrls,
-        isAdmin,
-        canComplete,
-        isBlankingStep,
         materialTypes: materialTypes || [],
         activeEmployees,
+        drawingUrls,
+        drawingCount,
+        hasDrawings: drawingCount > 0,
+        hasPending: pendingLen > 0,
+        isLoadingMore: false,
         ...(this.data.operatorId ? {} : {
           operatorId: defaultOperatorId,
           operatorLabel: defaultOperatorLabel
-        }),
-        ...(mcUpdate ? { materialConsumption: mcUpdate } : {})
+        })
       })
 
+
+      // ===== Phase 3: 下料工序才需要的重量/库存计算（完全异步，不阻塞 UI）=====
       if (isBlankingStep) {
-        await this._updateCalcWeight()
-      } else {
-        if (this.data.calcWeightInfo) {
-          this.setData({ calcWeightInfo: null })
-        }
+        this._updateCalcWeight()
+      } else if (this.data.calcWeightInfo) {
+        this.setData({ calcWeightInfo: null })
       }
     } catch (e) {
       ui.handleError(e, '加载工单失败')
     } finally {
       ui.hideLoading()
+      this._refreshing = false
     }
+  },
+
+  /**
+   * 批量解析图纸 fileID → 临时 URL
+   * 与首屏渲染解耦，避免 wx.cloud.getTempFileURL 阻塞页面展示
+   */
+  async _resolveDrawingUrls(drawings) {
+    const drawingUrls = []
+    if (!Array.isArray(drawings) || drawings.length === 0) return drawingUrls
+
+    const fileIDList = drawings.filter(d => d.fileID).map(d => d.fileID)
+    const localPaths = drawings.filter(d => d.tempFilePath && !d.fileID).map(d => d.tempFilePath)
+
+    if (fileIDList.length > 0) {
+      try {
+        const t = await wx.cloud.getTempFileURL({ fileList: fileIDList })
+        if (t && t.fileList) {
+          for (const item of t.fileList) {
+            if (item.tempFileURL) drawingUrls.push(item.tempFileURL)
+          }
+        }
+      } catch (e) {
+        console.warn('[order-detail] 图纸临时链接获取失败', e)
+      }
+    }
+    drawingUrls.push(...localPaths)
+    return drawingUrls
   },
 
   previewDrawing(event) {
@@ -162,6 +226,111 @@ Page({
     const index = event.currentTarget.dataset.index || 0
     if (urls.length === 0) return
     wx.previewImage({ current: urls[index], urls })
+  },
+
+  async chooseDrawing() {
+    if (this._choosingLock) return
+    this._choosingLock = true
+    try {
+      const app = getApp()
+      const privacyOk = await app.requirePrivacyAuthorize()
+      if (!privacyOk) return
+
+      const chooseResult = await new Promise((resolve) => {
+        wx.chooseMedia({
+          count: 9,
+          mediaType: ['image'],
+          sourceType: ['album', 'camera'],
+          success: (res) => resolve(res),
+          fail: () => resolve(null)
+        })
+      })
+
+      if (!chooseResult) return
+      const tempFiles = chooseResult.tempFiles || []
+      const pendingDrawings = (this.data.pendingDrawings || []).concat(
+        tempFiles.map((file, index) => ({
+          name: `drawing_${Date.now()}_${index}`,
+          tempFilePath: file.tempFilePath,
+          type: file.type || 'image',
+          size: file.size || 0
+        }))
+      )
+      const drawingCount = (this.data.drawingUrls || []).length + pendingDrawings.length
+      this.setData({
+        pendingDrawings,
+        drawingCount,
+        hasDrawings: drawingCount > 0,
+        hasPending: pendingDrawings.length > 0
+      })
+    } catch (e) {
+      ui.handleError(e, '选择图纸失败')
+    } finally {
+      this._choosingLock = false
+    }
+  },
+
+  removePendingDrawing(event) {
+    const index = Number(event.currentTarget.dataset.index)
+    const pendingDrawings = this.data.pendingDrawings.filter((_, i) => i !== index)
+    const drawingCount = (this.data.drawingUrls || []).length + pendingDrawings.length
+    this.setData({
+      pendingDrawings,
+      drawingCount,
+      hasDrawings: drawingCount > 0,
+      hasPending: pendingDrawings.length > 0
+    })
+  },
+
+  clearPendingDrawings() {
+    const drawingCount = (this.data.drawingUrls || []).length
+    this.setData({
+      pendingDrawings: [],
+      drawingCount,
+      hasDrawings: drawingCount > 0,
+      hasPending: false
+    })
+  },
+
+  async saveDrawings() {
+    const pendingDrawings = this.data.pendingDrawings || []
+    if (pendingDrawings.length === 0) return
+    const user = this.data.currentUser
+    if (!user || (user.role !== 'admin' && user.role !== 'superadmin')) {
+      ui.toast('仅管理员可上传图纸')
+      return
+    }
+    try {
+      ui.showLoading('上传图纸中...')
+      const order = this.data.order || {}
+      const drawings = []
+      const CONCURRENCY = 3
+      for (let i = 0; i < pendingDrawings.length; i += CONCURRENCY) {
+        const batch = pendingDrawings.slice(i, i + CONCURRENCY)
+        const results = await Promise.allSettled(batch.map(async (d) => {
+          const ext = (d.tempFilePath.match(/\.(\w+)$/) || [])[1] || 'jpg'
+          const cloudPath = `drawings/${order.singleNo || order.id || 'order'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+          const up = await wx.cloud.uploadFile({ cloudPath, filePath: d.tempFilePath })
+          return { name: d.name, fileID: up.fileID, cloudPath: up.fileID, type: d.type || 'image' }
+        }))
+        for (const result of results) {
+          if (result.status === 'fulfilled') drawings.push(result.value)
+        }
+      }
+
+      const res = await api.updateOrderDrawings(this.orderId, drawings)
+      const updated = res && res.order ? res.order : res
+      this.setData({
+        order: { ...updated, qrUrl: cachedQrUrl(updated.qrContent || updated.id, 320) },
+        pendingDrawings: []
+      })
+      await this.refresh()
+      ui.hideLoading()
+      ui.toast('图纸上传成功', 'success')
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '上传图纸失败')
+    }
   },
 
   onNoteInput(event) {
@@ -207,7 +376,23 @@ Page({
     this._updateCalcWeight()
   },
 
+  // 提取公共状态计算逻辑（refresh/completeStep/revertStep/saveStepChanges 复用）
+  _computeAccessState(user, order) {
+    const isAdmin = user.role === 'admin' || user.role === 'superadmin'
+    const _stations = user.stations || (user.station ? [user.station] : [])
+    const canComplete = order.status !== 'completed' && (isAdmin || _stations.includes(order.currentStation))
+    const currentStep = order.steps && order.steps[order.currentStepIndex]
+    const isBlankingStep = currentStep && currentStep.key === 'blanking'
+    const autoLength = (isBlankingStep && order.drawingDetail && order.drawingDetail.length) ? order.drawingDetail.length : ''
+    return { isAdmin, canComplete, isBlankingStep, autoLength }
+  },
+
   async _updateCalcWeight() {
+    if (this._calcWeightTimer) clearTimeout(this._calcWeightTimer)
+    this._calcWeightTimer = setTimeout(() => this._doCalcWeight(), 300)
+  },
+
+  async _doCalcWeight() {
     const { materialConsumption } = this.data
     const len = Number(materialConsumption.length)
     const rVal = Number(materialConsumption.roughness)
@@ -267,13 +452,7 @@ Page({
     })
   },
 
-  get filteredEmployees() {
-    const kw = (this.data.operatorSearchKeyword || '').toLowerCase()
-    if (!kw) return this.data.activeEmployees
-    return this.data.activeEmployees.filter(e =>
-      e.name.toLowerCase().includes(kw) || (e._stationDisplay || '').toLowerCase().includes(kw)
-    )
-  },
+
 
   async completeStep() {
     const { isBlankingStep, materialConsumption, note, completedQty } = this.data
@@ -315,19 +494,13 @@ Page({
         materialConsumption: submitConsumption
       })
       const order = result && result.order ? result.order : result
-
       const app = getApp()
-      const user = app.globalData.currentUser
-      const isAdmin = user.role === 'admin' || user.role === 'superadmin'
-      const _s = user.stations || (user.station ? [user.station] : [])
-      const canComplete = order.status !== 'completed' && (isAdmin || _s.includes(order.currentStation))
-      const nextStep = (order.steps || [])[order.currentStepIndex]
-      const nextBlanking = nextStep && nextStep.key === 'blanking'
+      const { isAdmin, canComplete, isBlankingStep: nextBlanking, autoLength } = this._computeAccessState(app.globalData.currentUser, order)
 
       this.setData({
         order: {
           ...order,
-          qrUrl: buildQrUrl(order.qrContent || order.id, 320)
+          qrUrl: cachedQrUrl(order.qrContent || order.id, 320)
         },
         note: '',
         completedQty: '',
@@ -349,7 +522,7 @@ Page({
     try {
       const order = await api.togglePause(this.orderId, !this.data.order.paused)
       this.setData({
-        order: { ...order, qrUrl: buildQrUrl(order.qrContent || order.id, 320) }
+        order: { ...order, qrUrl: cachedQrUrl(order.qrContent || order.id, 320) }
       })
       ui.toast(order.paused ? '已暂停' : '已恢复', 'none')
     } catch (e) {
@@ -361,7 +534,7 @@ Page({
     try {
       const order = await api.toggleOrderUrgent(this.orderId, !this.data.order.urgent)
       this.setData({
-        order: { ...order, qrUrl: buildQrUrl(order.qrContent || order.id, 320) }
+        order: { ...order, qrUrl: cachedQrUrl(order.qrContent || order.id, 320) }
       })
       ui.toast(order.urgent ? '已设为加急' : '已取消加急', 'success')
     } catch (e) {
@@ -433,16 +606,10 @@ Page({
       ui.showLoading('撤回中...')
       const updatedOrder = await api.revertCompletedStep(this.orderId, step.key)
       const app = getApp()
-      const user = app.globalData.currentUser
-      const isAdmin = user.role === 'admin' || user.role === 'superadmin'
-      const _s1 = user.stations || (user.station ? [user.station] : [])
-      const canComplete = updatedOrder.status !== 'completed' && (isAdmin || _s1.includes(updatedOrder.currentStation))
-      const revertedStep = (updatedOrder.steps || [])[updatedOrder.currentStepIndex]
-      const isBlankingAfterRevert = revertedStep && revertedStep.key === 'blanking'
-      const autoLengthAfterRevert = (isBlankingAfterRevert && updatedOrder.drawingDetail && updatedOrder.drawingDetail.length) ? updatedOrder.drawingDetail.length : ''
+      const { isAdmin, canComplete, isBlankingStep: isBlankingAfterRevert, autoLength: autoLengthAfterRevert } = this._computeAccessState(app.globalData.currentUser, updatedOrder)
 
       this.setData({
-        order: { ...updatedOrder, qrUrl: buildQrUrl(updatedOrder.qrContent || updatedOrder.id, 320) },
+        order: { ...updatedOrder, qrUrl: cachedQrUrl(updatedOrder.qrContent || updatedOrder.id, 320) },
         editingSteps: false,
         selectedSteps: updatedOrder.steps,
         selectedStepKeys: (updatedOrder.steps || []).map(s => s.key),
@@ -475,16 +642,10 @@ Page({
       ui.showLoading('保存中...')
       const updatedOrder = await api.updateOrderStepKeys(this.orderId, selectedStepKeys)
       const app = getApp()
-      const user = app.globalData.currentUser
-      const isAdmin = user.role === 'admin' || user.role === 'superadmin'
-      const _s2 = user.stations || (user.station ? [user.station] : [])
-      const canComplete = updatedOrder.status !== 'completed' && (isAdmin || _s2.includes(updatedOrder.currentStation))
-      const currentStepAfterSave = (updatedOrder.steps || [])[updatedOrder.currentStepIndex]
-      const isBlankingAfterSave = currentStepAfterSave && currentStepAfterSave.key === 'blanking'
-      const autoLengthAfterSave = (isBlankingAfterSave && updatedOrder.drawingDetail && updatedOrder.drawingDetail.length) ? updatedOrder.drawingDetail.length : ''
+      const { isAdmin, canComplete, isBlankingStep: isBlankingAfterSave, autoLength: autoLengthAfterSave } = this._computeAccessState(app.globalData.currentUser, updatedOrder)
 
       this.setData({
-        order: { ...updatedOrder, qrUrl: buildQrUrl(updatedOrder.qrContent || updatedOrder.id, 320) },
+        order: { ...updatedOrder, qrUrl: cachedQrUrl(updatedOrder.qrContent || updatedOrder.id, 320) },
         editingSteps: false,
         selectedSteps: updatedOrder.steps,
         selectedStepKeys: (updatedOrder.steps || []).map(s => s.key),

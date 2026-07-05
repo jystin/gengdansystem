@@ -25,6 +25,9 @@ const PROCESS_LIBRARY = [
   { key: 'warehouse', name: '入库', station: '仓管员' }
 ]
 
+// 构建 O(1) 查找字典（避免重复 .find() 遍历）
+const PROCESS_MAP = Object.fromEntries(PROCESS_LIBRARY.map(p => [p.key, p]))
+
 const ROUGHNESS_COEFFICIENTS = {
   '5.5': 0.135, '6': 0.228, '6.5': 0.26, '7': 0.302,
   '8': 0.395, '9': 0.499, '10': 0.617, '11': 0.746,
@@ -76,7 +79,7 @@ function getOrderCategory(order) {
 }
 
 function enrichOrder(order) {
-  const steps = (order.stepKeys || []).map(k => PROCESS_LIBRARY.find(p => p.key === k)).filter(Boolean)
+  const steps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
   return {
     ...order,
     steps,
@@ -165,7 +168,10 @@ async function listOrders(page = 1, pageSize = 100) {
 
 // 获取单个工单
 async function getOrder(orderId) {
-  const res = await db.collection('orders').where({ id: orderId }).get()
+  const res = await db.collection('orders')
+    .where({ id: orderId })
+    .limit(1)
+    .get()
   if (res.data.length === 0) return null
   return enrichOrder(res.data[0])
 }
@@ -221,7 +227,7 @@ async function revertStep(orderId, stepKey, user) {
   if (res.data.length === 0) throw new Error('工单不存在')
   const order = res.data[0]
 
-  const steps = (order.stepKeys || []).map(k => PROCESS_LIBRARY.find(p => p.key === k)).filter(Boolean)
+  const steps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
   // 关键修复：找到 history 中最后一个匹配 stepKey 的索引（而非 steps 数组中首个）
   // history 是按完成顺序追加，所以应该从尾部向前找最后完成的
   const history = order.history || []
@@ -251,12 +257,14 @@ async function revertStep(orderId, stepKey, user) {
       }
       if (returnTons && Number(returnTons) > 0) {
         try {
+          // 使用原子 inc 操作回退库存，避免并发竞态
           const invRes = await db.collection('inventory').where({ name: material }).get()
           if (invRes.data.length > 0) {
             const inv = invRes.data[0]
-            const stock = inv.stock || {}
-            stock[roughness] = (Number(stock[roughness]) || 0) + Number(returnTons)
-            await db.collection('inventory').doc(inv._id).update({ data: { stock, lastUpdatedAt: db.serverDate() } })
+            const stockPath = `stock.${roughness}`
+            await db.collection('inventory').doc(inv._id).update({
+              data: { [stockPath]: db.command.inc(Number(returnTons)), lastUpdatedAt: db.serverDate() }
+            })
             try {
               await db.collection('material_logs').add({
                 data: { type: 'in', material, roughness, qty: Number(returnTons), operator: user.name, operatorId: user._id, note: `撤回下料工序 ${orderId}，库存回退`, createdAt: db.serverDate() }
@@ -367,9 +375,10 @@ async function deleteOrder(orderId, user) {
         const invRes = await db.collection('inventory').where({ name: material }).get()
         if (invRes.data.length > 0) {
           const inv = invRes.data[0]
-          const stock = inv.stock || {}
-          stock[roughness] = (Number(stock[roughness]) || 0) + Number(returnTons)
-          await db.collection('inventory').doc(inv._id).update({ data: { stock, lastUpdatedAt: db.serverDate() } })
+          const stockPath = `stock.${roughness}`
+          await db.collection('inventory').doc(inv._id).update({
+            data: { [stockPath]: db.command.inc(Number(returnTons)), lastUpdatedAt: db.serverDate() }
+          })
           // 记录库存回退日志
           try {
             await db.collection('material_logs').add({
@@ -564,12 +573,11 @@ async function cleanupOldLogs() {
         .get()
       if (res.data.length === 0) break
 
-      for (const doc of res.data) {
-        try {
-          await db.collection('audit_logs').doc(doc._id).remove()
-          totalDeleted++
-        } catch (e) { /* 忽略单个删除失败 */ }
-      }
+      // 并行删除当前批次，显著加速清理
+      const delResults = await Promise.allSettled(
+        res.data.map(doc => db.collection('audit_logs').doc(doc._id).remove())
+      )
+      totalDeleted += delResults.filter(r => r.status === 'fulfilled').length
       if (res.data.length < 100) break
     }
     return totalDeleted

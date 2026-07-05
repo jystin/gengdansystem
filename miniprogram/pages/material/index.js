@@ -17,8 +17,15 @@ Page({
     outboundForm: { material: '', roughness: '', qty: '', note: '' }
   },
 
+  _isPageAlive: true,
+
   onLoad() {
+    this._isPageAlive = true
     this._load()
+  },
+
+  onUnload() {
+    this._isPageAlive = false
   },
 
   async onShow() {
@@ -47,6 +54,7 @@ Page({
         api.getMaterialInventory(),
         api.getMaterialLogs()
       ])
+      if (!this._isPageAlive) return
       const fmtInv = (inventory || []).map(item => ({
         ...item,
         stock: Math.round(item.stock * 1000) / 1000,
@@ -56,6 +64,7 @@ Page({
       const totalStock = Math.round(fmtInv.reduce((sum, item) => sum + item.stock, 0) * 1000) / 1000
       const materialTypes = fmtInv.length
       const lowCount = fmtInv.filter(item => item.hasLowRoughness).length
+      if (!this._isPageAlive) return
       this.setData({ inventory: fmtInv, logs: fmtLogs, totalStock, materialTypes, lowCount })
     } catch (e) {
       ui.handleError(e, '加载库存失败')
@@ -71,7 +80,6 @@ Page({
 
   closeInboundModal() {
     this.setData({ showInboundModal: false })
-    setTimeout(() => this.refresh(), 300)
   },
 
   bindInboundQty(event) { this.setData({ inboundForm: { ...this.data.inboundForm, qty: event.detail.value } }) },
@@ -87,9 +95,9 @@ Page({
       ui.toast('请输入有效的入库数量'); return
     }
     try {
-      await api.addMaterialStock(material, Number(qty), note, String(roughness))
+      const result = await api.addMaterialStock(material, Number(qty), note, String(roughness))
       this.setData({ showInboundModal: false })
-      setTimeout(() => this.refresh(), 300)
+      this._updateInventoryFromResult(result)
       ui.toast('入库成功', 'success')
     } catch (e) {
       ui.handleError(e, '入库失败')
@@ -103,7 +111,6 @@ Page({
 
   closeSetStockModal() {
     this.setData({ showSetStockModal: false })
-    setTimeout(() => this.refresh(), 300)
   },
 
   bindSetStockValue(event) { this.setData({ setStockForm: { ...this.data.setStockForm, stock: event.detail.value } }) },
@@ -119,9 +126,9 @@ Page({
       ui.toast('请输入有效的库存数量'); return
     }
     try {
-      await api.setMaterialStock(material, Number(stock), note, String(roughness))
+      const result = await api.setMaterialStock(material, Number(stock), note, String(roughness))
       this.setData({ showSetStockModal: false })
-      setTimeout(() => this.refresh(), 300)
+      this._updateInventoryFromResult(result)
       ui.toast('设置成功', 'success')
     } catch (e) {
       ui.handleError(e, '设置失败')
@@ -142,9 +149,9 @@ Page({
     const name = (this.data.addMaterialName || '').trim()
     if (!name) { ui.toast('请输入材料名称'); return }
     try {
-      await api.addMaterialType(name)
+      const result = await api.addMaterialType(name)
       this.setData({ showAddMaterialModal: false })
-      setTimeout(() => this.refresh(), 300)
+      this._updateInventoryFromResult(result)
       ui.toast('已新增材料：' + name, 'success')
     } catch (e) {
       ui.handleError(e, '新增失败')
@@ -158,7 +165,6 @@ Page({
 
   closeOutboundModal() {
     this.setData({ showOutboundModal: false })
-    setTimeout(() => this.refresh(), 300)
   },
 
   bindOutboundRoughness(event) { this.setData({ outboundForm: { ...this.data.outboundForm, roughness: event.detail.value } }) },
@@ -174,9 +180,9 @@ Page({
       ui.toast('请输入有效的出库数量'); return
     }
     try {
-      await api.deductMaterialStock(material, Number(qty), note || '直接出库（零售/损耗）', '', String(roughness))
+      const result = await api.deductMaterialStock(material, Number(qty), note || '直接出库（零售/损耗）', '', String(roughness))
       this.setData({ showOutboundModal: false })
-      setTimeout(() => this.refresh(), 300)
+      this._updateInventoryFromResult(result)
       ui.toast('出库成功', 'success')
     } catch (e) {
       ui.handleError(e, '出库失败')
@@ -185,5 +191,21 @@ Page({
 
   goHome() { wx.switchTab({ url: '/pages/home/index' }) },
   goToHome() { wx.reLaunch({ url: '/pages/home/index' }) },
-  preventClose() { /* 阻止冒泡 */ }
+  preventClose() { /* 阻止冒泡 */ },
+
+  // 利用云函数返回的最新库存数据直接更新 UI，避免额外 API 调用
+  _updateInventoryFromResult(result) {
+    if (!this._isPageAlive || !result) return
+    const inventory = result.inventory || result
+    if (!Array.isArray(inventory) || inventory.length === 0) return
+    const fmtInv = inventory.map(item => ({
+      ...item,
+      stock: Math.round(item.stock * 1000) / 1000,
+      detail: (item.detail || []).map(d => ({ ...d, stock: Math.round(d.stock * 1000) / 1000 }))
+    }))
+    const totalStock = Math.round(fmtInv.reduce((sum, item) => sum + item.stock, 0) * 1000) / 1000
+    const materialTypes = fmtInv.length
+    const lowCount = fmtInv.filter(item => item.hasLowRoughness).length
+    this.setData({ inventory: fmtInv, totalStock, materialTypes, lowCount })
+  }
 })

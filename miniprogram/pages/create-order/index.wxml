@@ -49,7 +49,7 @@
     </view>
 
     <view style="margin-top: 16rpx;">
-      <view class="subtitle" style="margin-bottom: 12rpx;">图纸（拍照上传）<text class="required">*</text></view>
+      <view class="subtitle" style="margin-bottom: 12rpx;">图纸（拍照上传）</view>
       <view class="drawing-list">
         <view wx:if="{{form.drawings.length === 0}}" class="empty-hint">暂无图纸</view>
         <block wx:else>

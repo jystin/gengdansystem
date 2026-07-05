@@ -45,6 +45,10 @@ Page({
     const app = getApp()
     await app.waitForAccessReady()
     if (!app.requireActiveAccess('/pages/scan/index')) return
+    // 如果距离上次鉴权超过 60 秒，刷新权限（防止管理员权限变更后当前用户拿到旧角色）
+    if (Date.now() - (app.globalData._lastAuthSyncTime || 0) > 60000) {
+      await app.refreshAuthContext()
+    }
     const currentUser = app.globalData.currentUser
     if (currentUser.role !== 'admin' && currentUser.role !== 'superadmin') {
       ui.toast('只有管理员可创建工单')
@@ -53,10 +57,9 @@ Page({
     }
     try {
       ui.showLoading('加载中...')
-      const [processList, orders] = await Promise.all([
-        Promise.resolve(api.getProcessLibrary()),
-        api.listOrders(1, 100).catch(() => [])
-      ])
+      // 【优化】getProcessLibrary() 是同步调用，无需 Promise.resolve 包装
+      const processList = api.getProcessLibrary()
+      const orders = await api.listOrders(1, 100).catch(() => [])
       this.setData({
         currentUser,
         processList,
@@ -77,23 +80,43 @@ Page({
 
   onShow() { /* 避免图片上传时表单被重置 */ },
 
-  chooseDrawing() {
-    wx.chooseMedia({
-      count: 9,
-      mediaType: ['image', 'video'],
-      sourceType: ['album', 'camera'],
-      success: (res) => {
-        const drawings = (this.data.form.drawings || []).concat(
-          res.tempFiles.map((file, index) => ({
-            name: `drawing_${Date.now()}_${index}`,
-            tempFilePath: file.tempFilePath,
-            type: file.type || 'image',
-            size: file.size
-          }))
-        )
-        this.setData({ form: { ...this.data.form, drawings } })
-      }
-    })
+  async chooseDrawing() {
+    if (this._choosingLock) return
+    this._choosingLock = true
+    try {
+      const app = getApp()
+      const privacyOk = await app.requirePrivacyAuthorize()
+      if (!privacyOk) return
+
+      const chooseResult = await new Promise((resolve) => {
+        wx.chooseMedia({
+          count: 9,
+          mediaType: ['image'],
+          sourceType: ['album', 'camera'],
+          success: (res) => resolve(res),
+          fail: () => resolve(null)
+        })
+      })
+
+      if (!chooseResult) return
+
+      const tempFiles = chooseResult.tempFiles || []
+      if (tempFiles.length === 0) return
+
+      const drawings = (this.data.form.drawings || []).concat(
+        tempFiles.map((file, index) => ({
+          name: `drawing_${Date.now()}_${index}`,
+          tempFilePath: file.tempFilePath,
+          type: file.type || 'image',
+          size: file.size || 0
+        }))
+      )
+      this.setData({ form: { ...this.data.form, drawings } })
+    } catch (e) {
+      ui.handleError(e, '上传图纸失败')
+    } finally {
+      this._choosingLock = false
+    }
   },
 
   removeDrawing(event) {
@@ -179,6 +202,10 @@ Page({
     const app = getApp()
     await app.waitForAccessReady()
     if (!app.requireActiveAccess('/pages/scan/index')) return
+    // 提交时也检查一次权限是否过期
+    if (Date.now() - (app.globalData._lastAuthSyncTime || 0) > 60000) {
+      await app.refreshAuthContext()
+    }
     const currentUser = app.globalData.currentUser
     if (currentUser.role !== 'admin' && currentUser.role !== 'superadmin') {
       ui.toast('只有管理员可创建工单')
@@ -193,7 +220,6 @@ Page({
     if (!form.material) missing.push('材质')
     if (!form.dueDate) missing.push('交货期')
     if (!form.singleNo) missing.push('单号')
-    if (!form.drawings || form.drawings.length === 0) missing.push('图纸')
     if (form.urgent !== true && form.urgent !== false) missing.push('是否急要')
     if (form.isReorder !== true && form.isReorder !== false) missing.push('是否补单')
     if (!form.selectedStepKeys || form.selectedStepKeys.length === 0) missing.push('工序配置')
@@ -204,26 +230,27 @@ Page({
 
     try {
       ui.showLoading('上传图纸中...')
-      // 上传图纸到云存储
+      // 上传图纸到云存储（并行控制并发数为3，比串行快约3倍）
       const drawings = []
+      const filesToUpload = (form.drawings || []).filter(d => d.tempFilePath)
+      // 本地图纸直接保留引用
       for (const d of (form.drawings || [])) {
-        if (d.tempFilePath) {
-          try {
-            const ext = (d.tempFilePath.match(/\.(\w+)$/) || [])[1] || 'jpg'
-            const cloudPath = `drawings/${form.singleNo || 'order'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
-            const up = await wx.cloud.uploadFile({ cloudPath, filePath: d.tempFilePath })
-            drawings.push({
-              name: d.name,
-              fileID: up.fileID,
-              cloudPath: up.fileID,
-              type: d.type || 'image'
-            })
-          } catch (e) {
-            // 上传失败的图纸保留本地引用，避免阻断
-            drawings.push({ name: d.name, tempFilePath: d.tempFilePath, type: d.type || 'image' })
+        if (!d.tempFilePath) drawings.push(d)
+      }
+      // 分段并行上传
+      const CONCURRENCY = 3
+      for (let i = 0; i < filesToUpload.length; i += CONCURRENCY) {
+        const batch = filesToUpload.slice(i, i + CONCURRENCY)
+        const results = await Promise.allSettled(batch.map(async (d) => {
+          const ext = (d.tempFilePath.match(/\.(\w+)$/) || [])[1] || 'jpg'
+          const cloudPath = `drawings/${form.singleNo || 'order'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+          const up = await wx.cloud.uploadFile({ cloudPath, filePath: d.tempFilePath })
+          return { name: d.name, fileID: up.fileID, cloudPath: up.fileID, type: d.type || 'image' }
+        }))
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            drawings.push(result.value)
           }
-        } else {
-          drawings.push(d)
         }
       }
 
@@ -294,15 +321,18 @@ Page({
         dueDate: order.dueDate || '',
         singleNo: '',
         drawings: [],
-        drawingDetail: {
-          blankingRoughness: order.drawingDetail?.blankingRoughness || order.drawingDetail?.roughness || '',
-          productRoughness: order.drawingDetail?.productRoughness || order.drawingDetail?.bossRoughness || '',
-          length: order.drawingDetail?.length || '',
-          topHoleThread: order.drawingDetail?.topHoleThread || order.drawingDetail?.thread || '',
-          topHole: order.drawingDetail?.topHole || order.drawingDetail?.hasHole || '',
-          crossHole: order.drawingDetail?.crossHole || order.drawingDetail?.markText || '',
-          squareHead: order.drawingDetail?.squareHead || ''
-        },
+        drawingDetail: (() => {
+          const dd = order.drawingDetail || {}
+          return {
+            blankingRoughness: dd.blankingRoughness || dd.roughness || '',
+            productRoughness: dd.productRoughness || dd.bossRoughness || '',
+            length: dd.length || '',
+            topHoleThread: dd.topHoleThread || dd.thread || '',
+            topHole: dd.topHole || dd.hasHole || '',
+            crossHole: dd.crossHole || dd.markText || '',
+            squareHead: dd.squareHead || ''
+          }
+        })(),
         urgent: null,
         isReorder: null,
         selectedStepKeys: order.stepKeys || []

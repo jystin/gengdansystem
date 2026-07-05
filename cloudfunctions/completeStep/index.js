@@ -25,6 +25,8 @@ const PROCESS_LIBRARY = [
   { key: 'warehouse', name: '入库', station: '仓管员' }
 ]
 
+const PROCESS_MAP = Object.fromEntries(PROCESS_LIBRARY.map(p => [p.key, p]))
+
 function formatTime() {
   const now = new Date()
   const pad = n => String(n).padStart(2, '0')
@@ -76,7 +78,7 @@ exports.main = async (event, context) => {
       return { success: false, error: '工单已暂停，仅管理员可处理' }
     }
 
-    const steps = (order.stepKeys || []).map(k => PROCESS_LIBRARY.find(p => p.key === k)).filter(Boolean)
+    const steps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
     const currentStep = steps[order.currentStepIndex]
     if (!currentStep) {
       // 所有工序已完成或索引越界，记录完工操作并标记为已完成
@@ -123,7 +125,7 @@ exports.main = async (event, context) => {
         })
       } catch (e) { /* 非关键 */ }
       // 构建 steps 数组供前端使用（自动完工情况）
-      const finalSteps = (order.stepKeys || []).map(k => PROCESS_LIBRARY.find(p => p.key === k)).filter(Boolean)
+      const finalSteps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
       return { success: true, order: { ...order, steps: finalSteps, currentStepName: '已完成', currentStation: '入库完成', status: 'completed', completedDate: formatTime(), history: finalHistory } }
     }
 
@@ -268,7 +270,7 @@ exports.main = async (event, context) => {
     } catch (e) { /* 非关键 */ }
 
     // 构建 steps 数组供前端使用
-    const updatedSteps = (order.stepKeys || []).map(k => PROCESS_LIBRARY.find(p => p.key === k)).filter(Boolean)
+    const updatedSteps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
     const nextCurrentStep = updatedSteps[newStepIndex]
     const updatedOrder = {
       ...order,

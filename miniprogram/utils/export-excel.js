@@ -7,14 +7,18 @@
 
 const fs = wx.getFileSystemManager()
 
-// 判断当前是否为手机端
+// 【优化】isMobile 结果缓存（设备信息在生命周期内不变）
+let _isMobileCache = null
 function isMobile() {
+  if (_isMobileCache !== null) return _isMobileCache
   try {
-    const sysInfo = wx.getSystemInfoSync()
-    return ['ios', 'android'].includes(sysInfo.platform)
+    const deviceInfo = wx.getDeviceInfo ? wx.getDeviceInfo() : {}
+    const platform = deviceInfo.platform || (wx.getSystemInfoSync ? wx.getSystemInfoSync().platform : '')
+    _isMobileCache = ['ios', 'android'].includes(platform)
   } catch (e) {
-    return true // 默认按手机处理
+    _isMobileCache = true // 默认按手机处理
   }
+  return _isMobileCache
 }
 
 // ===================== CSV 格式（电脑端用）=====================
@@ -95,7 +99,8 @@ function generateOrderHtml(orders) {
     '交货日期', '下单日期', '状态', '是否加急', '进度',
     '序号', '工序名称', '生产人员', '岗位', '完成时间', '备注'
   ]
-  let rows = ''
+  // 【优化】用数组 push + join 替代多次字符串拼接，减少 GC 压力
+  const rowParts = []
 
   orders.forEach((order) => {
     const allSteps = order.steps || []
@@ -139,7 +144,7 @@ function generateOrderHtml(orders) {
             `<td style="background:#f0fdf4;"></td>`
           ].join('')
         }
-        rows += `<tr>${infoCells}${stepCells}</tr>`
+        rowParts.push(`<tr>${infoCells}${stepCells}</tr>`)
       } else {
         const emptyInfo = new Array(12).fill('<td></td>').join('')
         let stepCells
@@ -159,7 +164,7 @@ function generateOrderHtml(orders) {
             `<td></td>`, `<td></td>`
           ].join('')
         }
-        rows += `<tr>${emptyInfo}${stepCells}</tr>`
+        rowParts.push(`<tr>${emptyInfo}${stepCells}</tr>`)
       }
     })
   })
@@ -167,8 +172,6 @@ function generateOrderHtml(orders) {
   const headerCells = headers.map(h =>
     `<th style="background:#0f766e;color:#fff;padding:8px 10px;border:1px solid #0f766e;">${h}</th>`
   ).join('')
-  const tableRows = rows ||
-    '<tr><td colspan="18" style="text-align:center;padding:20px;color:#666;">无数据</td></tr>'
 
   return `<html xmlns:o="urn:schemas-microsoft-com:office:office"
 xmlns:x="urn:schemas-microsoft-com:office:excel"
@@ -183,7 +186,7 @@ td,th{border:1px solid #d0d7de;padding:6px 10px;font-size:12px;white-space:nowra
 <body>
 <table>
 <thead><tr>${headerCells}</tr></thead>
-<tbody>${tableRows}</tbody>
+<tbody>${rowParts.length > 0 ? rowParts.join('') : '<tr><td colspan="18" style="text-align:center;padding:20px;color:#666;">无数据</td></tr>'}</tbody>
 </table>
 </body></html>`
 }
@@ -270,7 +273,8 @@ function generateProductionDetailHtml(rows, singleEmployee, year) {
     grouped[k].sort((a, b) => a.monthKey.localeCompare(b.monthKey) || (a.completedAt || '').localeCompare(b.completedAt || ''))
   })
 
-  let bodyHtml = ''
+  // 【优化】用数组 push + join 构建 HTML，避免重复字符串拼接
+  const bodyParts = []
 
   const employees = singleEmployee ? [singleEmployee.employee.name] : Object.keys(grouped).sort()
   employees.forEach(empName => {
@@ -278,17 +282,17 @@ function generateProductionDetailHtml(rows, singleEmployee, year) {
     if (empRows.length === 0) return
     const station = allEmployees.get(empName) || ''
 
-    bodyHtml += `<tr><td colspan="6" style="background:#0f766e;color:#fff;padding:12px 16px;font-weight:700;font-size:14px;">${escapeHtml(empName)} · ${escapeHtml(station)} · 共 ${empRows.length} 条记录</td></tr>`
+    bodyParts.push(`<tr><td colspan="6" style="background:#0f766e;color:#fff;padding:12px 16px;font-weight:700;font-size:14px;">${escapeHtml(empName)} · ${escapeHtml(station)} · 共 ${empRows.length} 条记录</td></tr>`)
 
     // 表头行
-    bodyHtml += `<tr>
+    bodyParts.push(`<tr>
       <th style="background:#f1f5f9;padding:8px 10px;border:1px solid #e2e8f0;font-size:11px;">工单号</th>
       <th style="background:#f1f5f9;padding:8px 10px;border:1px solid #e2e8f0;font-size:11px;">客户</th>
       <th style="background:#f1f5f9;padding:8px 10px;border:1px solid #e2e8f0;font-size:11px;">工序</th>
       <th style="background:#f1f5f9;padding:8px 10px;border:1px solid #e2e8f0;font-size:11px;">数量(根)</th>
       <th style="background:#f1f5f9;padding:8px 10px;border:1px solid #e2e8f0;font-size:11px;">完成时间</th>
       <th style="background:#f1f5f9;padding:8px 10px;border:1px solid #e2e8f0;font-size:11px;">月份</th>
-    </tr>`
+    </tr>`)
 
     let lastMonth = ''
     empRows.forEach(r => {
@@ -298,20 +302,18 @@ function generateProductionDetailHtml(rows, singleEmployee, year) {
         lastMonth = monthLabel
       }
       const bg = monthChanged ? '#f0fdf4' : '#ffffff'
-      bodyHtml += `<tr>
+      bodyParts.push(`<tr>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;font-weight:600; color:#0369a1;">${escapeHtml(r.orderId)}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;">${escapeHtml(r.customerName || '-')}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;">${escapeHtml(r.stepName)}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;text-align:center;font-weight:600;">${r.orderQty}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;">${r.completedAt || '-'}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;text-align:center;">${monthLabel}</td>
-      </tr>`
+      </tr>`)
     })
   })
 
-  if (!bodyHtml) {
-    bodyHtml = '<tr><td colspan="6" style="text-align:center;padding:40px;color:#94a3b8;">暂无生产记录</td></tr>'
-  }
+  const bodyHtml = bodyParts.length > 0 ? bodyParts.join('') : '<tr><td colspan="6" style="text-align:center;padding:40px;color:#94a3b8;">暂无生产记录</td></tr>'
 
   const title = singleEmployee
     ? `${singleEmployee.employee.name} 月度生产明细 (${year})`

@@ -93,19 +93,36 @@
     </block>
   </view>
 
-  <view class="section card" wx:if="{{order.drawings && order.drawings.length > 0}}">
-    <view class="section-title">图纸附件（{{order.drawings.length}}张）</view>
-    <view class="drawing-grid">
-      <block wx:for="{{order.drawings}}" wx:key="name">
+  <view class="section card">
+    <view class="section-title-row">
+      <text class="section-title">图纸附件（{{drawingCount}}张）</text>
+      <button wx:if="{{isAdmin}}" class="upload-btn small" bindtap="chooseDrawing">上传图纸</button>
+    </view>
+
+    <view class="drawing-grid" wx:if="{{hasDrawings}}">
+      <block wx:for="{{drawingUrls}}" wx:key="*this">
         <image
           class="drawing-thumb"
-          src="{{item.tempFilePath || ''}}"
+          src="{{item}}"
           mode="aspectFill"
           data-urls="{{drawingUrls}}"
           data-index="{{index}}"
           bindtap="previewDrawing"
         />
       </block>
+      <block wx:for="{{pendingDrawings}}" wx:key="name">
+        <view class="drawing-thumb drawing-pending">
+          <image class="drawing-thumb-img" src="{{item.tempFilePath}}" mode="aspectFill" />
+          <text class="drawing-pending-tag">待上传</text>
+          <view class="drawing-delete" data-index="{{index}}" bindtap="removePendingDrawing">×</view>
+        </view>
+      </block>
+    </view>
+    <view wx:else class="empty-hint">暂无图纸</view>
+
+    <view wx:if="{{hasPending}}" class="drawing-save-bar">
+      <button class="primary-btn" bindtap="saveDrawings">保存图纸</button>
+      <button class="secondary-btn" bindtap="clearPendingDrawings">取消</button>
     </view>
   </view>
 
@@ -121,6 +138,10 @@
       <view wx:if="{{order.drawingDetail.crossHole}}" class="detail-item"><text class="detail-label">横孔</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.crossHole}}</text></view>
       <view wx:if="{{order.drawingDetail.squareHead}}" class="detail-item full-width"><text class="detail-label">方头</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.squareHead}}</text></view>
     </view>
+  </view>
+
+  <view wx:if="{{isLoadingMore}}" class="section card loading-more">
+    <view class="loading-more-text">正在加载员工、材料等参考数据…</view>
   </view>
 
   <view class="section card">

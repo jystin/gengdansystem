@@ -123,14 +123,14 @@ async function createBackup(operatorName) {
 
   await db.collection('backups').add({ data: backupDoc })
 
-  // 自动清理旧备份
+  // 自动清理旧备份（并行删除）
   try {
     const allBackups = await db.collection('backups').orderBy('createdAt', 'desc').get()
     if (allBackups.data.length > MAX_BACKUPS) {
       const toDelete = allBackups.data.slice(MAX_BACKUPS)
-      for (const doc of toDelete) {
-        await db.collection('backups').doc(doc._id).remove()
-      }
+      await Promise.allSettled(
+        toDelete.map(doc => db.collection('backups').doc(doc._id).remove().catch(() => {}))
+      )
     }
   } catch (e) { /* 非关键 */ }
 
@@ -154,7 +154,7 @@ async function restoreBackup(backupId, operatorName) {
   let totalRestored = 0
   const errors = []
 
-  // 逐集合清空并还原
+  // 逐集合并行清空并还原
   for (const col of BACKUP_COLLECTIONS) {
     const data = backup.collections[col]
     if (!data || data.length === 0) {
@@ -163,23 +163,22 @@ async function restoreBackup(backupId, operatorName) {
     }
 
     try {
-      // 清空现有数据
+      // 清空现有数据（并行删除）
       const existing = await fetchAll(col)
-      for (const doc of existing) {
-        try { await db.collection(col).doc(doc._id).remove() } catch (e) { /* 忽略 */ }
+      if (existing.length > 0) {
+        await Promise.allSettled(
+          existing.map(doc => db.collection(col).doc(doc._id).remove().catch(() => {}))
+        )
       }
 
-      // 逐条恢复（云函数不支持批量写入，但每条约200条以内可以完成）
+      // 逐条恢复（云函数不支持批量写入）
       let restored = 0
       for (const doc of data) {
         try {
-          // 移除 _id，让数据库自动生成新 ID（保持原 _id 可能导致冲突）
           const { _id, ...rest } = doc
-          // 将 serverDate 占位符保留为字符串，实际不需要特殊处理
           await db.collection(col).add({ data: rest })
           restored++
         } catch (e) {
-          // 单条失败记录错误但不中断
           errors.push(`${col}: ${e.message}`)
         }
       }

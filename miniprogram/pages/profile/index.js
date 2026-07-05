@@ -24,7 +24,7 @@ Page({
       ui.showLoading('加载中...')
       const [allEmployees, dashboard, logs, monthlyStats] = await Promise.all([
         api.listEmployees().catch(() => []),
-        api.getDashboard(),
+        api.getDashboard().catch(() => null),
         api.listLogs(2).catch(() => []),
         api.getEmployeeMonthlyProduction(user.id, String(new Date().getFullYear())).catch(() => null)
       ])
@@ -32,10 +32,10 @@ Page({
         .filter(e => e.status === 'active')
         .map(e => {
           const nameFallback = (user && user.id && e.id === user.id && user.name) ? user.name : '员工'
-          return { ...e, name: api.cleanName(e.name, nameFallback), roleLabel: api.roleLabel(e.role) }
+          return { ...e, name: api.cleanName(e.name, nameFallback), roleLabel: api.roleLabel(e.role), _stationDisplay: api.getEmployeeDisplayStations(e) }
         })
       this.setData({
-        user: { ...user, name: api.cleanName(user.name, '用户'), roleLabel: api.roleLabel(user.role) },
+        user: { ...user, name: api.cleanName(user.name, '用户'), roleLabel: api.roleLabel(user.role), stationsDisplay: api.getEmployeeDisplayStations(user) },
         dashboard: dashboard || {},
         employees: activeEmployees,
         logs: (logs || []).slice(0, 6).map(api.normalizeLog).filter(Boolean),
@@ -92,5 +92,12 @@ Page({
       return
     }
     wx.navigateTo({ url: '/pages/admin/index' })
+  },
+
+  /** 打开隐私保护指引 */
+  openPrivacyContract() {
+    if (typeof wx.openPrivacyContract === 'function') {
+      wx.openPrivacyContract()
+    }
   }
 })

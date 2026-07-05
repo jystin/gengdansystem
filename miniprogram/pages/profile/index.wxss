@@ -167,6 +167,17 @@
   font-weight: 600;
 }
 
+.privacy-footer {
+  text-align: center;
+  padding: 30rpx 20rpx 60rpx;
+}
+
+.privacy-link {
+  color: #94a3b8;
+  font-size: 24rpx;
+  text-decoration: underline;
+}
+
 @media (max-width: 720px) {
   .month-grid {
     grid-template-columns: repeat(2, 1fr);

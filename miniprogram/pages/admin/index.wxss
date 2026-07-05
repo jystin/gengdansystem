@@ -101,7 +101,7 @@
 
 .metric-arrow {
   font-size: 28rpx;
-  color: #cbd5e1;
+  color: #94a3b8;
   line-height: 1;
   flex-shrink: 0;
   margin-left: 6rpx;
@@ -360,4 +360,114 @@
   .production-row {
     grid-template-columns: 180rpx repeat(12, 1fr) 80rpx;
   }
+}
+
+/* ===== 系统镜像点 ===== */
+.snapshot-section {
+  border-left: 5rpx solid #6366f1;
+}
+
+.snapshot-controls {
+  margin-top: 18rpx;
+}
+
+.snapshot-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.snapshot-picker {
+  flex: 1;
+  min-width: 0;
+}
+
+.snapshot-select {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 18rpx;
+  background: #f8fafc;
+  padding: 18rpx 20rpx;
+  font-size: 24rpx;
+  color: #1e293b;
+  border: 2rpx solid #e2e8f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snapshot-placeholder {
+  color: #94a3b8;
+}
+
+.snapshot-count {
+  flex-shrink: 0;
+  font-size: 22rpx;
+  color: #94a3b8;
+  font-weight: 600;
+  min-width: 60rpx;
+  text-align: right;
+}
+
+.snapshot-actions {
+  display: flex;
+  gap: 12rpx;
+  margin-top: 16rpx;
+}
+
+.snapshot-create-btn,
+.snapshot-restore-btn {
+  flex: 1;
+  text-align: center;
+}
+
+.snapshot-empty {
+  margin-top: 14rpx;
+  text-align: center;
+  padding: 20rpx 0;
+}
+
+/* ===== 镜像点进度条 ===== */
+.snapshot-progress-wrap {
+  margin-top: 18rpx;
+}
+
+.snapshot-progress-bar {
+  width: 100%;
+  height: 16rpx;
+  background: #e2e8f0;
+  border-radius: 10rpx;
+  overflow: hidden;
+}
+
+.snapshot-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 10rpx;
+  transition: width 0.4s ease;
+  min-width: 8rpx;
+}
+
+.snapshot-progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8rpx;
+}
+
+.snapshot-progress-text {
+  font-size: 22rpx;
+  color: #475569;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snapshot-progress-pct {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  font-size: 22rpx;
+  font-weight: 700;
+  color: #6366f1;
 }

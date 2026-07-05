@@ -126,10 +126,12 @@
 
               <!-- 岗位标签展示 -->
               <view wx:if="{{editingEmpId !== item.id}}" class="emp-stations-display">
+                <!-- 【UI】管理员标签：仅当角色为管理员时渲染，样式与工种标签明显区分 -->
+                <view wx:if="{{item.role === 'admin'}}" class="emp-admin-tag">管理员</view>
                 <block wx:for="{{item.stations}}" wx:for-item="st" wx:key="*this">
                   <view class="emp-station-tag">{{st}}</view>
                 </block>
-                <view wx:if="{{!item.stations || item.stations.length === 0}}" class="emp-stations-empty">未分配岗位</view>
+                <view wx:if="{{(!item.stations || item.stations.length === 0) && item.role !== 'admin'}}" class="emp-stations-empty">未分配岗位</view>
               </view>
 
               <!-- 岗位编辑模式（checkbox 多选） -->

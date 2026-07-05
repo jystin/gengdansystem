@@ -1,0 +1,9 @@
+{
+  "name": "snapshotManager",
+  "version": "1.0.0",
+  "description": "系统镜像点管理 - 每 8 小时自动镜像 + 手动创建/列表/恢复/删除",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~3.0.4"
+  }
+}

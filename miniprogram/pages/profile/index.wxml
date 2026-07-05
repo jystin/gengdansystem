@@ -6,7 +6,7 @@
     <view class="row">
       <view>
         <view class="title">{{user.name}}</view>
-        <view class="subtle">{{user.role === 'superadmin' ? '超级管理员' : user.role === 'admin' ? '管理员' : '操作工'}} · {{user.stations ? user.stations.join('、') : (user.station || '')}}</view>
+        <view class="subtle">{{user.role === 'superadmin' ? '超级管理员' : user.role === 'admin' ? '管理员' : '操作工'}} · {{user.stationsDisplay || '未分配岗位'}}</view>
       </view>
       <text class="badge badge-info">{{user.role === 'superadmin' ? '超管' : user.role === 'admin' ? '管理' : '员工'}}</text>
     </view>
@@ -88,7 +88,7 @@
           <text class="employee-name">{{item.name}}</text>
           <text class="badge badge-success">{{item.statusLabel || '已激活'}}</text>
         </view>
-        <view class="subtle">{{item.stations ? item.stations.join('、') : item.station}} · {{item.roleLabel || '员工'}}</view>
+        <view class="subtle">{{item._stationDisplay || '未分配岗位'}} · {{item.roleLabel || '员工'}}</view>
       </view>
     </block>
   </view>
@@ -104,5 +104,9 @@
         <view class="subtle">{{item.target}} · {{item.operator}}</view>
       </view>
     </block>
+  </view>
+
+  <view class="privacy-footer">
+    <text class="privacy-link" bindtap="openPrivacyContract">《隐私保护指引》</text>
   </view>
 </view>
