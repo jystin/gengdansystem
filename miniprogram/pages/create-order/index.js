@@ -181,7 +181,10 @@ Page({
     const step = this.data.processList.find((p) => p.key === stepKey)
     if (!step) return
     const form = this.data.form
-    const newSelectedSteps = [...this.data.selectedSteps, { ...step, instanceId: `${stepKey}_${Date.now()}` }]
+    const newSelectedSteps = [...this.data.selectedSteps, {
+      ...step,
+      instanceId: `${stepKey}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    }]
     this.setData({
       selectedSteps: newSelectedSteps,
       form: { ...form, selectedStepKeys: newSelectedSteps.map((s) => s.key) }
@@ -190,6 +193,12 @@ Page({
 
   removeSelectedStep(event) {
     const instanceId = event.currentTarget.dataset.instanceId
+    // 防御 instanceId 缺失时误清空全部
+    if (!instanceId) {
+      console.warn('[create-order] 删除工序失败：缺少 instanceId')
+      ui.toast('操作失败，请重试')
+      return
+    }
     const form = this.data.form
     const newSelectedSteps = this.data.selectedSteps.filter((s) => s.instanceId !== instanceId)
     this.setData({
@@ -305,9 +314,12 @@ Page({
     const orderId = event.currentTarget.dataset.id
     const order = this.data.copyOrders.find((o) => o.id === orderId)
     if (!order) return
-    const selectedSteps = (order.stepKeys || []).map((key) => {
+    const selectedSteps = (order.stepKeys || []).map((key, index) => {
       const proc = this.data.processList.find((p) => p.key === key)
-      return proc ? { ...proc, instanceId: key + '_' + Date.now() } : null
+      return proc ? {
+        ...proc,
+        instanceId: `${key}_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`
+      } : null
     }).filter(Boolean)
 
     this.setData({

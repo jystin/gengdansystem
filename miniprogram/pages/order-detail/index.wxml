@@ -84,6 +84,7 @@
             <view class="row">
               <text class="step-name">{{item.name}}</text>
               <text class="subtle">{{item.station}}</text>
+              <button wx:if="{{isAdmin && index < order.currentStepIndex}}" class="step-revert-btn" bindtap="revertStep" data-step-key="{{item.key}}">撤回</button>
             </view>
             <view class="subtle" wx:if="{{index < order.history.length}}">{{order.history[index].operator}} - {{order.history[index].completedAt}}{{order.history[index].qty ? ' - ' + order.history[index].qty + '根' : ''}}</view>
             <view class="subtle" wx:else>等待处理</view>

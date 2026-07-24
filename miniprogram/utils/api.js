@@ -246,11 +246,13 @@ async function toggleOrderUrgent(orderId, urgent) {
 }
 async function revertCompletedStep(orderId, stepKey) {
   clearCache()
-  return callFunction('orderManager', { action: 'revertStep', orderId, stepKey })
+  const r = await callFunction('orderManager', { action: 'revertStep', orderId, stepKey })
+  return r.order || null
 }
 async function updateOrderStepKeys(orderId, stepKeys) {
   clearCache()
-  return callFunction('orderManager', { action: 'updateStepKeys', orderId, stepKeys })
+  const r = await callFunction('orderManager', { action: 'updateStepKeys', orderId, stepKeys })
+  return r.order || null
 }
 async function updateOrderDrawings(orderId, drawings) {
   clearCache()

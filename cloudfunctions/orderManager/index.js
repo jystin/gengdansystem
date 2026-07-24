@@ -1,4 +1,4 @@
-/**
+      /**
  * 工单管理云函数
  * 支持：获取工单列表、工单详情、暂停/恢复、加急/取消加急、撤回工序、修改工序配置
  */
@@ -223,75 +223,132 @@ async function toggleUrgent(orderId, urgent, user) {
 // 撤回已完成工序
 async function revertStep(orderId, stepKey, user) {
   requireAdmin(user)
+  if (!orderId || !stepKey) throw new Error('缺少工单ID或工序标识')
+
   const res = await db.collection('orders').where({ id: orderId }).get()
   if (res.data.length === 0) throw new Error('工单不存在')
   const order = res.data[0]
 
   const steps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
-  // 关键修复：找到 history 中最后一个匹配 stepKey 的索引（而非 steps 数组中首个）
-  // history 是按完成顺序追加，所以应该从尾部向前找最后完成的
+  const stepDef = PROCESS_MAP[stepKey]
+  if (!stepDef) throw new Error(`未知工序：${stepKey}`)
+
+  // history 是按完成顺序追加，从尾部向前找最后完成的匹配工序
   const history = order.history || []
   let lastHistoryIdx = -1
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].stepKey === stepKey) { lastHistoryIdx = i; break }
   }
   if (lastHistoryIdx < 0) throw new Error('该工序尚未完成，无法撤回')
-  if (lastHistoryIdx >= (order.currentStepIndex || 0)) throw new Error('该工序尚未完成')
 
-  // revertIndex 取 history 索引 +1（currentStepIndex 指向下一个待执行）
-  const revertIndex = lastHistoryIdx + 1
+  // revertIndex 取 history 索引（currentStepIndex 指向被撤回工序本身，即该工序重新变为待执行）
+  // 以 history 记录为准，不再与 currentStepIndex 做冗余比较，避免数据不一致时误报
+  const revertIndex = lastHistoryIdx
+  const removedRecords = history.slice(revertIndex)
+  const targetRecord = history[lastHistoryIdx]
 
-  // 下料工序撤回：回退库存
-  if (stepKey === 'blanking') {
-    const blankingHistory = history[lastHistoryIdx]
-    if (blankingHistory && blankingHistory.materialConsumption && blankingHistory.materialConsumption.material) {
-      const mc = blankingHistory.materialConsumption
-      const material = mc.material
-      const roughness = String(mc.roughness || '')
-      let returnTons = mc.calcTons
-      if (!returnTons && mc.qty && roughness) {
-        const rVal = Number(roughness)
-        const len = Number(mc.length) || 1
-        const coef = ROUGHNESS_COEFFICIENTS[roughness] || (rVal * rVal * 0.006165)
-        returnTons = len * 1.05 * coef * 0.001 * Number(mc.qty) / 1000
-      }
-      if (returnTons && Number(returnTons) > 0) {
-        try {
-          // 使用原子 inc 操作回退库存，避免并发竞态
-          const invRes = await db.collection('inventory').where({ name: material }).get()
-          if (invRes.data.length > 0) {
-            const inv = invRes.data[0]
-            const stockPath = `stock.${roughness}`
-            await db.collection('inventory').doc(inv._id).update({
-              data: { [stockPath]: db.command.inc(Number(returnTons)), lastUpdatedAt: db.serverDate() }
-            })
-            try {
-              await db.collection('material_logs').add({
-                data: { type: 'in', material, roughness, qty: Number(returnTons), operator: user.name, operatorId: user._id, note: `撤回下料工序 ${orderId}，库存回退`, createdAt: db.serverDate() }
-              })
-            } catch (e) { /* 非关键 */ }
-          }
-        } catch (e) { /* 静默处理 */ }
-      }
+  // 计算被移除记录中涉及下料的库存回退总量，按 (material, roughness) 分组汇总
+  // removedRecords 已包含被撤回的目标工序本身及之后所有记录
+  const inventoryReturnMap = {}
+  const blankingRecordsToRevert = removedRecords.filter(r => r.stepKey === 'blanking' && r.materialConsumption && r.materialConsumption.material)
+
+  for (const record of blankingRecordsToRevert) {
+    const mc = record.materialConsumption
+    const material = mc.material
+    const roughness = String(mc.roughness || '')
+    let returnTons = mc.calcTons
+    if (!returnTons && mc.qty && roughness) {
+      const rVal = Number(roughness)
+      const len = Number(mc.length) || 1
+      const coef = ROUGHNESS_COEFFICIENTS[roughness] || (rVal * rVal * 0.006165)
+      returnTons = len * 1.05 * coef * 0.001 * Number(mc.qty) / 1000
+    }
+    if (returnTons && Number(returnTons) > 0) {
+      const key = `${material}|${roughness}`
+      if (!inventoryReturnMap[key]) inventoryReturnMap[key] = { material, roughness, total: 0 }
+      inventoryReturnMap[key].total += Number(returnTons)
     }
   }
 
-  // 撤回：移除该步骤及之后的所有历史记录，回退 currentStepIndex
-  const newHistory = history.filter((h, idx) => idx < revertIndex)
-  const newStatus = order.status === 'completed' ? 'processing' : order.status
+  // 下料工序撤回：回退库存（支持多个规格分批回退）
+  const inventoryReturnItems = Object.values(inventoryReturnMap)
+  for (const item of inventoryReturnItems) {
+    try {
+      const invRes = await db.collection('inventory').where({ name: item.material }).get()
+      if (invRes.data.length > 0) {
+        const inv = invRes.data[0]
+        const stockPath = `stock.${item.roughness}`
+        await db.collection('inventory').doc(inv._id).update({
+          data: { [stockPath]: db.command.inc(item.total), lastUpdatedAt: db.serverDate() }
+        })
+        try {
+          await db.collection('material_logs').add({
+            data: {
+              type: 'in',
+              material: item.material,
+              roughness: item.roughness,
+              qty: item.total,
+              operator: user.name,
+              operatorId: user._id,
+              orderId,
+              note: `撤回下料工序 ${orderId}，库存回退`,
+              createdAt: db.serverDate()
+            }
+          })
+        } catch (e) { /* 非关键 */ }
+      }
+    } catch (e) { /* 静默处理库存回滚失败 */ }
+  }
 
-  await db.collection('orders').doc(order._id).update({
+  // 撤回：移除该步骤及之后的所有历史记录（包含被撤回工序本身），回退 currentStepIndex
+  const newHistory = history.filter((h, idx) => idx < revertIndex)
+  const becameProcessing = order.status === 'completed'
+  const newStatus = becameProcessing ? 'processing' : order.status
+
+  // 乐观锁：防止并发回退冲突
+  const updateResult = await db.collection('orders').where({
+    _id: order._id,
+    currentStepIndex: order.currentStepIndex,
+    status: order.status
+  }).update({
     data: {
       history: newHistory,
       currentStepIndex: revertIndex,
       status: newStatus,
+      completedDate: becameProcessing ? null : (order.completedDate || null),
       updatedAt: db.serverDate()
     }
   })
 
+  if (updateResult.stats.updated === 0) {
+    throw new Error('该工序状态已变更，请刷新后重试')
+  }
+
+  // 记录审计日志：包含原完成时间、被移除工序、操作人等信息
   try {
     await db.collection('audit_logs').add({
-      data: { action: '撤回工序', targetId: orderId, targetName: steps[Math.min(revertIndex, steps.length - 1)] ? steps[Math.min(revertIndex, steps.length - 1)].name : stepKey, operatorId: user._id, operatorName: user.name, createdAt: db.serverDate() }
+      data: {
+        action: '撤回工序',
+        targetId: orderId,
+        targetName: stepDef.name,
+        operatorId: user._id,
+        operatorName: user.name,
+        detail: {
+          stepKey,
+          stepName: stepDef.name,
+          revertedFromIndex: order.currentStepIndex,
+          revertedToIndex: revertIndex,
+          originalCompletedAt: targetRecord ? targetRecord.completedAt : '',
+          removedStepKeys: removedRecords.map(r => r.stepKey),
+          removedOperators: [...new Set(removedRecords.map(r => r.operator).filter(Boolean))],
+          inventoryReturned: inventoryReturnItems.length > 0 ? inventoryReturnItems.map(item => ({
+            material: item.material,
+            roughness: item.roughness,
+            qty: item.total
+          })) : null
+        },
+        createdAt: db.serverDate()
+      }
     })
   } catch (e) { /* 非关键 */ }
 
@@ -305,13 +362,26 @@ async function updateStepKeys(orderId, newStepKeys, user) {
   if (res.data.length === 0) throw new Error('工单不存在')
   const order = res.data[0]
 
-  let newIndex = order.currentStepIndex
-  if (newIndex >= newStepKeys.length) {
-    newIndex = newStepKeys.length - 1
+  const oldStepKeys = order.stepKeys || []
+  const oldIndex = order.currentStepIndex || 0
+  const completedKeys = oldStepKeys.slice(0, oldIndex)
+
+  // 重新计算 currentStepIndex：按新工序列表顺序匹配旧的已完成工序前缀
+  let completedIdx = 0
+  let newIndex = 0
+  for (const key of newStepKeys) {
+    if (completedIdx < completedKeys.length && key === completedKeys[completedIdx]) {
+      completedIdx++
+      newIndex = completedIdx
+    } else {
+      break
+    }
   }
 
+  const newStatus = newIndex >= newStepKeys.length ? 'completed' : (order.status === 'completed' ? 'processing' : order.status)
+
   await db.collection('orders').doc(order._id).update({
-    data: { stepKeys: newStepKeys, currentStepIndex: newIndex, updatedAt: db.serverDate() }
+    data: { stepKeys: newStepKeys, currentStepIndex: newIndex, status: newStatus, updatedAt: db.serverDate() }
   })
 
   try {
@@ -443,7 +513,7 @@ async function getEmployeeMonthlyProduction(employeeId, year) {
       const monthMatch = String(record.completedAt || '').match(/^(\d{4}-\d{2})/)
       const monthKey = monthMatch ? monthMatch[1] : ''
       if (!monthKey.startsWith(String(year))) continue
-      rows.push({ orderId: order.id, customerName: order.customerName || '', orderQty: Number(order.qty) || 0, employeeId, employeeName: record.operator, monthKey, completedAt: record.completedAt })
+      rows.push({ orderId: order.id, customerName: order.customerName || '', qty: Number(record.qty) || 0, employeeId, employeeName: record.operator, monthKey, completedAt: record.completedAt })
     }
   }
 
@@ -453,7 +523,7 @@ async function getEmployeeMonthlyProduction(employeeId, year) {
   }))
   const monthlyMap = {}
   months.forEach(m => { monthlyMap[m.key] = 0 })
-  rows.forEach(r => { if (monthlyMap[r.monthKey] !== undefined) monthlyMap[r.monthKey] += r.orderQty })
+  rows.forEach(r => { if (monthlyMap[r.monthKey] !== undefined) monthlyMap[r.monthKey] += r.qty })
 
   let employee = null
   try {
@@ -500,7 +570,7 @@ async function getAllEmployeesMonthlyProduction(year) {
       const monthMatch = String(record.completedAt || '').match(/^(\d{4}-\d{2})/)
       const monthKey = monthMatch ? monthMatch[1] : ''
       if (stat.monthlyMap[monthKey] !== undefined) {
-        stat.monthlyMap[monthKey] += (Number(order.qty) || 0)
+        stat.monthlyMap[monthKey] += (Number(record.qty) || 0)
       }
     }
   }
@@ -525,7 +595,7 @@ async function getProductionRows() {
       rows.push({
         orderId: order.id,
         customerName: order.customerName || '',
-        orderQty: Number(order.qty) || 0,
+        qty: Number(record.qty) || 0,
         employeeId: record.operatorId || '',
         employeeName: record.operator,
         monthKey: monthMatch ? monthMatch[1] : '',

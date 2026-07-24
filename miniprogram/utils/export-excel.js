@@ -306,7 +306,7 @@ function generateProductionDetailHtml(rows, singleEmployee, year) {
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;font-weight:600; color:#0369a1;">${escapeHtml(r.orderId)}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;">${escapeHtml(r.customerName || '-')}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;">${escapeHtml(r.stepName)}</td>
-        <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;text-align:center;font-weight:600;">${r.orderQty}</td>
+        <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;text-align:center;font-weight:600;">${r.qty}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;">${r.completedAt || '-'}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;background:${bg};font-size:12px;text-align:center;">${monthLabel}</td>
       </tr>`)

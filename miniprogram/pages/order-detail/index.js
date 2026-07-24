@@ -121,14 +121,17 @@ Page({
       }
 
       // 先渲染首屏，让用户立刻看到工单主体
+      // 如果当前处于编辑工序模式，则不要覆盖已选工序，避免 instanceId 丢失导致删除时清空全部
       this.setData({
         order: {
           ...order,
           qrUrl: cachedQrUrl(order.qrContent || order.id, 320)
         },
         currentUser: user,
-        selectedSteps: order.steps || [],
-        selectedStepKeys: (order.steps || []).map(s => s.key),
+        ...(this.data.editingSteps ? {} : {
+          selectedSteps: order.steps || [],
+          selectedStepKeys: (order.steps || []).map(s => s.key)
+        }),
         isAdmin,
         canComplete,
         isBlankingStep,
@@ -549,12 +552,12 @@ Page({
     }
     const processList = api.getProcessLibrary()
     const { order } = this.data
-    const confirmedKeys = new Set((order.history || []).map(h => h.stepKey))
+    const currentStepIndex = order.currentStepIndex || 0
     const selectedSteps = (order.steps || []).map((step, index) => ({
       ...step,
-      instanceId: `${step.key}_${index}_${Date.now()}`,
-      canDelete: !confirmedKeys.has(step.key),
-      canRevert: confirmedKeys.has(step.key) && index < order.currentStepIndex
+      instanceId: `${step.key}_${index}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      canDelete: index >= currentStepIndex,
+      canRevert: index < currentStepIndex
     }))
     this.setData({
       editingSteps: true,
@@ -573,7 +576,13 @@ Page({
     const stepKey = event.currentTarget.dataset.key
     const step = this.data.processList.find((p) => p.key === stepKey)
     if (!step) return
-    const newSelectedSteps = [...this.data.selectedSteps, { ...step, instanceId: `${stepKey}_${Date.now()}`, canDelete: true }]
+    const newStep = {
+      ...step,
+      instanceId: `${stepKey}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      canDelete: true,
+      canRevert: false
+    }
+    const newSelectedSteps = [...this.data.selectedSteps, newStep]
     this.setData({
       selectedSteps: newSelectedSteps,
       selectedStepKeys: newSelectedSteps.map((s) => s.key)
@@ -582,6 +591,12 @@ Page({
 
   removeSelectedStep(event) {
     const instanceId = event.currentTarget.dataset.instanceId
+    // 防御 instanceId 缺失时误清空全部
+    if (!instanceId) {
+      console.warn('[order-detail] 删除工序失败：缺少 instanceId')
+      ui.toast('操作失败，请重试')
+      return
+    }
     const step = this.data.selectedSteps.find(s => s.instanceId === instanceId)
     if (step && !step.canDelete) {
       ui.toast('该工序已完成，无法删除')
@@ -595,24 +610,46 @@ Page({
   },
 
   async revertStep(event) {
-    const instanceId = event.currentTarget.dataset.instanceId
-    const step = this.data.selectedSteps.find(s => s.instanceId === instanceId)
-    if (!step || !step.canRevert) return
+    // 严格限制：仅管理员可回退工序
+    if (!this.data.isAdmin) {
+      ui.toast('仅管理员可回退工序')
+      return
+    }
 
+    const instanceId = event.currentTarget.dataset.instanceId
+    const stepKey = event.currentTarget.dataset.stepKey
+    let step = null
+    if (instanceId) {
+      step = this.data.selectedSteps.find(s => s.instanceId === instanceId)
+    } else if (stepKey) {
+      step = (this.data.order.steps || []).find(s => s.key === stepKey)
+    }
+    if (!step) return
+
+    // 二次确认，防止误操作
     const ok = await ui.confirm(`确定要撤回「${step.name}」吗？该工序的完成记录将被移除，当前工序将回退到此步骤。`, '确认撤回', { confirmColor: '#e53935' })
     if (!ok) return
 
     try {
       ui.showLoading('撤回中...')
       const updatedOrder = await api.revertCompletedStep(this.orderId, step.key)
+      if (!updatedOrder || !Array.isArray(updatedOrder.stepKeys)) {
+        ui.hideLoading()
+        ui.toast('撤回失败，返回数据异常')
+        return
+      }
+      const revertedSteps = updatedOrder.steps || updatedOrder.stepKeys.map(k => {
+        const p = api.getProcessByKey(k)
+        return p ? { ...p } : null
+      }).filter(Boolean)
       const app = getApp()
       const { isAdmin, canComplete, isBlankingStep: isBlankingAfterRevert, autoLength: autoLengthAfterRevert } = this._computeAccessState(app.globalData.currentUser, updatedOrder)
 
       this.setData({
         order: { ...updatedOrder, qrUrl: cachedQrUrl(updatedOrder.qrContent || updatedOrder.id, 320) },
         editingSteps: false,
-        selectedSteps: updatedOrder.steps,
-        selectedStepKeys: (updatedOrder.steps || []).map(s => s.key),
+        selectedSteps: revertedSteps,
+        selectedStepKeys: (updatedOrder.stepKeys || []).map(k => k),
         isAdmin,
         canComplete,
         isBlankingStep: isBlankingAfterRevert,
@@ -641,14 +678,24 @@ Page({
     try {
       ui.showLoading('保存中...')
       const updatedOrder = await api.updateOrderStepKeys(this.orderId, selectedStepKeys)
+      if (!updatedOrder || !Array.isArray(updatedOrder.stepKeys)) {
+        ui.hideLoading()
+        ui.toast('保存失败，返回数据异常')
+        return
+      }
+      // 若后端未展开 steps，则根据 stepKeys 本地同步，确保 UI 有数据
+      const savedSteps = updatedOrder.steps || updatedOrder.stepKeys.map(k => {
+        const p = api.getProcessByKey(k)
+        return p ? { ...p } : null
+      }).filter(Boolean)
       const app = getApp()
       const { isAdmin, canComplete, isBlankingStep: isBlankingAfterSave, autoLength: autoLengthAfterSave } = this._computeAccessState(app.globalData.currentUser, updatedOrder)
 
       this.setData({
         order: { ...updatedOrder, qrUrl: cachedQrUrl(updatedOrder.qrContent || updatedOrder.id, 320) },
         editingSteps: false,
-        selectedSteps: updatedOrder.steps,
-        selectedStepKeys: (updatedOrder.steps || []).map(s => s.key),
+        selectedSteps: savedSteps,
+        selectedStepKeys: (updatedOrder.stepKeys || []).map(k => k),
         isAdmin,
         canComplete,
         isBlankingStep: isBlankingAfterSave,
