@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const ui = require('../../utils/ui')
+const storage = require('../../utils/cloud-storage')
 
 function emptyForm() {
   return {
@@ -17,8 +18,8 @@ function emptyForm() {
       blankingRoughness: '',
       productRoughness: '',
       length: '',
+      blankingLength: '',
       topHoleThread: '',
-      topHole: '',
       crossHole: '',
       squareHead: ''
     },
@@ -29,12 +30,17 @@ function emptyForm() {
 Page({
   data: {
     currentUser: { role: '', status: 'active' },
+    isAdmin: false,
     form: emptyForm(),
     createdOrderId: '',
     processList: [],
     selectedSteps: [],
     showCopyModal: false,
-    copyOrders: []
+    copyOrders: [],
+    templates: [],
+    showSaveTemplateModal: false,
+    templateName: '',
+    templateDesc: ''
   },
 
   async onLoad() {
@@ -50,20 +56,31 @@ Page({
       await app.refreshAuthContext()
     }
     const currentUser = app.globalData.currentUser
-    if (currentUser.role !== 'admin' && currentUser.role !== 'superadmin') {
+    const isAdmin = currentUser.role === 'admin' || currentUser.role === 'superadmin'
+    if (!isAdmin) {
       ui.toast('只有管理员可创建工单')
       wx.redirectTo({ url: '/pages/home/index' })
       return
     }
     try {
       ui.showLoading('加载中...')
-      // 【优化】getProcessLibrary() 是同步调用，无需 Promise.resolve 包装
       const processList = api.getProcessLibrary()
       const orders = await api.listOrders(1, 100).catch(() => [])
+      // 加载固定工序模板（仅管理员）
+      const tplRes = await api.listProcessTemplates().catch(() => ({ templates: [] }))
+      const templates = (tplRes && tplRes.templates) || []
+      // 为每个模板预计算工序展示名
+      const processMap = Object.fromEntries(processList.map(p => [p.key, p]))
+      const enrichedTemplates = templates.map(t => ({
+        ...t,
+        previewSteps: (t.stepKeys || []).map(k => processMap[k]).filter(Boolean)
+      }))
       this.setData({
         currentUser,
+        isAdmin,
         processList,
         copyOrders: orders || [],
+        templates: enrichedTemplates,
         selectedSteps: [],
         form: { ...emptyForm(), selectedStepKeys: [] }
       })
@@ -104,12 +121,17 @@ Page({
       if (tempFiles.length === 0) return
 
       const drawings = (this.data.form.drawings || []).concat(
-        tempFiles.map((file, index) => ({
-          name: `drawing_${Date.now()}_${index}`,
-          tempFilePath: file.tempFilePath,
-          type: file.type || 'image',
-          size: file.size || 0
-        }))
+        tempFiles.map((file, index) => {
+          // 保留原文件扩展名，便于后续预览和下载
+          const originalName = (file.tempFilePath || '').split('.').pop() || ''
+          const ext = originalName.match(/^(jpg|jpeg|png|gif|webp|bmp|pdf)$/i) ? originalName.toLowerCase() : 'jpg'
+          return {
+            name: `drawing_${Date.now()}_${index}.${ext}`,
+            tempFilePath: file.tempFilePath,
+            type: file.type || 'image',
+            size: file.size || 0
+          }
+        })
       )
       this.setData({ form: { ...this.data.form, drawings } })
     } catch (e) {
@@ -253,7 +275,7 @@ Page({
         const results = await Promise.allSettled(batch.map(async (d) => {
           const ext = (d.tempFilePath.match(/\.(\w+)$/) || [])[1] || 'jpg'
           const cloudPath = `drawings/${form.singleNo || 'order'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
-          const up = await wx.cloud.uploadFile({ cloudPath, filePath: d.tempFilePath })
+          const up = await storage.uploadFile(cloudPath, d.tempFilePath)
           return { name: d.name, fileID: up.fileID, cloudPath: up.fileID, type: d.type || 'image' }
         }))
         for (const result of results) {
@@ -284,8 +306,23 @@ Page({
       this.setData({ form: emptyForm(), createdOrderId: order.id || '' })
       ui.hideLoading()
       ui.toast('工单创建成功', 'success')
-      if (order.id) {
-        wx.navigateTo({ url: `/pages/order-detail/index?id=${order.id}` })
+      // 二维码降级提示（WX_APP_SECRET 未配置等场景），看完再进详情
+      const goDetail = () => {
+        if (order.id) {
+          wx.navigateTo({ url: `/pages/order-detail/index?id=${order.id}` })
+        }
+      }
+      if (result && result.qrWarning) {
+        console.warn('[create-order]', result.qrWarning)
+        wx.showModal({
+          title: '小程序码生成失败',
+          content: result.qrWarning,
+          showCancel: false,
+          confirmText: '知道了',
+          success: goDetail
+        })
+      } else {
+        goDetail()
       }
     } catch (e) {
       ui.hideLoading()
@@ -339,8 +376,8 @@ Page({
             blankingRoughness: dd.blankingRoughness || dd.roughness || '',
             productRoughness: dd.productRoughness || dd.bossRoughness || '',
             length: dd.length || '',
+            blankingLength: dd.blankingLength || '',
             topHoleThread: dd.topHoleThread || dd.thread || '',
-            topHole: dd.topHole || dd.hasHole || '',
             crossHole: dd.crossHole || dd.markText || '',
             squareHead: dd.squareHead || ''
           }
@@ -353,5 +390,111 @@ Page({
       showCopyModal: false
     })
     ui.toast('已读取：' + orderId, 'none')
+  },
+
+  // ========== 固定工序模板相关 ==========
+
+  applyTemplate(event) {
+    const { id, keys } = event.currentTarget.dataset
+    const stepKeys = Array.isArray(keys) ? keys : []
+    if (stepKeys.length === 0) {
+      ui.toast('模板内容为空')
+      return
+    }
+    const tpl = this.data.templates.find(t => t._id === id)
+    const tplName = tpl ? tpl.name : ''
+    const processMap = Object.fromEntries(this.data.processList.map(p => [p.key, p]))
+    const newSelectedSteps = stepKeys.map((key, index) => {
+      const proc = processMap[key]
+      if (!proc) return null
+      return {
+        ...proc,
+        instanceId: `${key}_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`
+      }
+    }).filter(Boolean)
+
+    if (newSelectedSteps.length === 0) {
+      ui.toast('模板中的工序在当前工序库不存在')
+      return
+    }
+
+    this.setData({
+      selectedSteps: newSelectedSteps,
+      form: { ...this.data.form, selectedStepKeys: newSelectedSteps.map(s => s.key) },
+      templates: this.data.templates.map(t => ({ ...t, _expanded: false }))
+    })
+    ui.toast(`已导入模板「${tplName}」(${newSelectedSteps.length} 个工序)`, 'success')
+  },
+
+  toggleTemplateExpand(event) {
+    const { id } = event.currentTarget.dataset
+    this.setData({
+      templates: this.data.templates.map(t => ({ ...t, _expanded: t._id === id ? !t._expanded : false }))
+    })
+  },
+
+  openSaveTemplateModal() {
+    const keys = this.data.form.selectedStepKeys || []
+    if (keys.length === 0) {
+      ui.toast('请先在下工序添加要保存的工序')
+      return
+    }
+    this.setData({
+      showSaveTemplateModal: true,
+      templateName: '',
+      templateDesc: ''
+    })
+  },
+
+  closeSaveTemplateModal() {
+    this.setData({ showSaveTemplateModal: false })
+  },
+
+  bindTemplateName(event) {
+    this.setData({ templateName: event.detail.value })
+  },
+
+  bindTemplateDesc(event) {
+    this.setData({ templateDesc: event.detail.value })
+  },
+
+  async submitSaveTemplate() {
+    const { templateName, templateDesc, form } = this.data
+    const name = (templateName || '').trim()
+    if (!name) { ui.toast('请输入模板名称'); return }
+    const stepKeys = form.selectedStepKeys || []
+    if (stepKeys.length === 0) {
+      ui.toast('当前没有已选工序，无法保存')
+      return
+    }
+    try {
+      ui.showLoading('保存中...')
+      const res = await api.saveProcessTemplate(name, stepKeys, templateDesc)
+      ui.hideLoading()
+      const tpl = (res && (res.template || res)) || {}
+      const processMap = Object.fromEntries(this.data.processList.map(p => [p.key, p]))
+      const newTpl = { ...tpl, previewSteps: (tpl.stepKeys || stepKeys).map(k => processMap[k]).filter(Boolean) }
+      this.setData({
+        templates: [newTpl, ...this.data.templates],
+        showSaveTemplateModal: false
+      })
+      ui.toast('模板已保存', 'success')
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '保存失败')
+    }
+  },
+
+  async confirmDeleteTemplate(event) {
+    const { id, name } = event.currentTarget.dataset
+    const ok = await ui.confirm(`确定删除模板「${name}」吗？此操作不可恢复。`, '删除模板', { confirmColor: '#dc2626', confirmText: '删除' })
+    if (!ok) return
+    try {
+      await api.deleteProcessTemplate(id)
+      this.setData({ templates: this.data.templates.filter(t => t._id !== id) })
+      ui.toast('已删除模板', 'success')
+    } catch (e) {
+      ui.handleError(e, '删除失败')
+    }
   }
 })

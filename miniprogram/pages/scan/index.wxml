@@ -24,7 +24,7 @@
       <view class="quick-item" bindtap="openOrder" data-id="{{item.id}}">
         <view class="row">
           <text class="quick-id">{{item.id}}</text>
-          <text class="badge {{item.paused ? 'badge-warning' : item.status === 'completed' ? 'badge-success' : item.overdue ? 'badge-danger' : item.urgent ? 'badge-warning' : 'badge-info'}}">{{item.statusLabel}}</text>
+          <text class="badge {{item.category === 'notStarted' ? 'badge-grey' : item.category === 'paused' ? 'badge-warning' : item.category === 'completed' ? 'badge-success' : item.category === 'overdue' ? 'badge-danger' : item.category === 'urgent' ? 'badge-urgent' : 'badge-info'}}">{{item.statusLabel}}</text>
         </view>
         <view class="subtle">{{item.customer}} · {{item.currentStepName}}</view>
       </view>

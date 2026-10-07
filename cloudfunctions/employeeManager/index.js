@@ -25,6 +25,7 @@ function requireAdmin(user) {
 
 function requireSuperAdmin(user) {
   if (!user) throw new Error('用户不存在')
+  if (user.status !== 'active') throw new Error('账号未启用')
   if (user.role !== 'superadmin') throw new Error('仅超级管理员可执行此操作')
 }
 
@@ -43,7 +44,6 @@ async function listEmployees() {
       stations: u.stations || [],
       status: u.status,
       openid: u.openid || '',
-      deviceId: u.deviceId || u.lastDeviceId || '',
       createdAt: u.createdAt
     }))
 
@@ -54,24 +54,20 @@ async function listEmployees() {
       stations: p.stations || [],
       status: 'pending',
       openid: p.openid || '',
-      deviceId: p.deviceId || '',
       inviteSource: p.inviteSource || 'scan',
       inviteNote: p.note || '',
       createdAt: p.createdAt
     }))
 
-    // 按 openid / deviceId / name 去重：users 中的记录优先级更高，避免已审批员工和待审申请同时出现
-    const userKeys = new Set()
+    // 按 openid 去重：users 中的记录优先级更高，避免已审批员工和待审申请同时出现
+    // 注意：不能用 name 去重，否则同名不同人的员工会被误过滤
+    const userOpenids = new Set()
     employees.forEach(e => {
-      if (e.openid) userKeys.add(`openid:${e.openid}`)
-      if (e.deviceId) userKeys.add(`deviceId:${e.deviceId}`)
-      if (e.name) userKeys.add(`name:${e.name}`)
+      if (e.openid) userOpenids.add(`openid:${e.openid}`)
     })
 
     const filteredPending = pending.filter(p => {
-      if (p.openid && userKeys.has(`openid:${p.openid}`)) return false
-      if (p.deviceId && userKeys.has(`deviceId:${p.deviceId}`)) return false
-      if (p.name && userKeys.has(`name:${p.name}`)) return false
+      if (p.openid && userOpenids.has(`openid:${p.openid}`)) return false
       return true
     })
 
@@ -146,9 +142,15 @@ async function updateRole(employeeId, role, user) {
   if (empRes.data.role === 'superadmin') throw new Error('不能修改超级管理员')
 
   const newRole = role === 'admin' ? 'admin' : 'worker'
-  const newStations = [...(empRes.data.stations || [])]
-  if (newRole === 'admin' && !newStations.includes('管理员中心')) {
-    newStations.unshift('管理员中心')
+  let newStations = [...(empRes.data.stations || [])]
+  if (newRole === 'admin') {
+    // 设为管理员时确保有"管理员中心"岗位
+    if (!newStations.includes('管理员中心')) {
+      newStations.unshift('管理员中心')
+    }
+  } else {
+    // 取消管理员时移除"管理员中心"岗位，避免仍能访问管理员中心
+    newStations = newStations.filter(s => s !== '管理员中心')
   }
 
   await db.collection('users').doc(employeeId).update({

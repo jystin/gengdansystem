@@ -193,6 +193,23 @@ Page({
   goToHome() { wx.reLaunch({ url: '/pages/home/index' }) },
   preventClose() { /* 阻止冒泡 */ },
 
+  async removeRoughness(event) {
+    const { material, roughness, stock } = event.currentTarget.dataset
+    const ok = await ui.confirm(
+      `确定删除「${material} φ${roughness}」（当前 ${stock} 吨）吗？\n删除后该粗度库存将从该材料中移除，不会影响其他粗度。`,
+      '删除粗度库存',
+      { confirmColor: '#dc2626', confirmText: '删除' }
+    )
+    if (!ok) return
+    try {
+      const result = await api.removeMaterialRoughness(material, roughness)
+      this._updateInventoryFromResult(result)
+      ui.toast('已删除 ' + material + ' φ' + roughness, 'success')
+    } catch (e) {
+      ui.handleError(e, '删除失败')
+    }
+  },
+
   // 利用云函数返回的最新库存数据直接更新 UI，避免额外 API 调用
   _updateInventoryFromResult(result) {
     if (!this._isPageAlive || !result) return

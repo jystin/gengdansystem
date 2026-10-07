@@ -196,6 +196,10 @@ function getRoughnessCoefficient(r) {
 
 async function login(deviceId) {
   const res = await callFunction('auth', { action: 'login', deviceId }, { noRetry: true })
+  if (res && res.warning) {
+    // 非阻断性警告（如 TOKEN_SECRET 未配置），仅输出日志便于排查
+    console.warn('[api] 鉴权警告:', res.warning)
+  }
   return res
 }
 async function verify(token) {
@@ -258,9 +262,41 @@ async function updateOrderDrawings(orderId, drawings) {
   clearCache()
   return callFunction('orderManager', { action: 'updateDrawings', orderId, drawings })
 }
+// 编辑工单核心字段(防下错单)
+async function updateOrderFields(orderId, fields) {
+  clearCache()
+  return callFunction('orderManager', { action: 'updateOrderFields', orderId, fields })
+}
 async function deleteOrder(orderId) {
   clearCache()
   return callFunction('orderManager', { action: 'deleteOrder', orderId })
+}
+async function safeDeleteOrder(orderId, note = '') {
+  clearCache()
+  return callFunction('orderManager', { action: 'safeDeleteOrder', orderId, note })
+}
+async function listProcessTemplates() {
+  return callFunction('orderManager', { action: 'listProcessTemplates' })
+}
+async function saveProcessTemplate(name, stepKeys, description = '') {
+  return callFunction('orderManager', { action: 'saveProcessTemplate', name, stepKeys, description })
+}
+async function deleteProcessTemplate(templateId) {
+  return callFunction('orderManager', { action: 'deleteProcessTemplate', templateId })
+}
+
+// =====================================================================
+// 小程序码
+// =====================================================================
+
+/**
+ * 为指定工单生成/获取微信小程序码
+ * @param {string} orderId 工单号
+ * @param {boolean} forceRegenerate 是否强制重新生成（默认 false，优先使用缓存）
+ * @returns {{ fileID: string, cached: boolean }}
+ */
+async function generateWxacode(orderId, forceRegenerate = false) {
+  return callFunction('wxacodeGenerator', { orderId, forceRegenerate })
 }
 
 // =====================================================================
@@ -325,6 +361,10 @@ async function deductMaterialStock(material, qty, note, orderId, roughness) {
   clearCache()
   return callFunction('inventoryManager', { action: 'deductStock', material, qty, note, orderId, roughness })
 }
+async function removeMaterialRoughness(material, roughness, note = '') {
+  clearCache()
+  return callFunction('inventoryManager', { action: 'removeRoughness', material, roughness, note })
+}
 async function setMaterialStock(material, stock, note, roughness) {
   clearCache()
   return callFunction('inventoryManager', { action: 'setStock', material, stock, note, roughness })
@@ -369,6 +409,7 @@ async function cleanupOldLogs() {
 async function createBackup() { return callFunction('backupManager', { action: 'backup' }) }
 async function listBackups() { return callFunction('backupManager', { action: 'list' }) }
 async function restoreBackup(backupId, confirm = true) {
+  clearCache()
   return callFunction('backupManager', { action: 'restore', backupId, confirm })
 }
 async function deleteBackup(backupId) { return callFunction('backupManager', { action: 'delete', backupId }) }
@@ -384,6 +425,7 @@ async function listSnapshots() {
   return callFunction('snapshotManager', { action: 'list' })
 }
 async function restoreSnapshot(snapshotId, confirm = true) {
+  clearCache()
   return callFunction('snapshotManager', { action: 'restore', snapshotId, confirm })
 }
 async function deleteSnapshot(snapshotId) {
@@ -562,7 +604,12 @@ module.exports = {
   revertCompletedStep,
   updateOrderStepKeys,
   updateOrderDrawings,
+  updateOrderFields,
   deleteOrder,
+  safeDeleteOrder,
+  listProcessTemplates,
+  saveProcessTemplate,
+  deleteProcessTemplate,
   // 员工
   listEmployees,
   updateEmployeeStations,
@@ -579,6 +626,7 @@ module.exports = {
   deductMaterialStock,
   setMaterialStock,
   addMaterialType,
+  removeMaterialRoughness,
   getMaterialLogs,
   // 产量
   getEmployeeMonthlyProduction,
@@ -597,6 +645,8 @@ module.exports = {
   listSnapshots,
   restoreSnapshot,
   deleteSnapshot,
+  // 小程序码
+  generateWxacode,
   // 工具
   getCurrentUserId,
   isCurrentUserAdmin,

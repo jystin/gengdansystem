@@ -28,9 +28,9 @@ App({
     _kickoutModalShown: false,      // 防止重复弹出踢出弹窗
 
     // ===== 隐私 API 授权配置 =====
-    // 设为 true   → 启用完整的微信隐私 API 作用域检查（上线前需要在微信后台配置隐私协议）
+    // 设为 true   → 启用完整的微信隐私 API 作用域检查（上线前必须在微信后台配置隐私协议）
     // 设为 false  → 开发阶段跳过所有隐私检查，chooseMedia/chooseImage 直接可用
-    privacyCheckEnabled: false
+    privacyCheckEnabled: true
   },
 
   async onLaunch() {
@@ -116,12 +116,23 @@ App({
   /**
    * 小程序从后台回到前台时，自动刷新鉴权状态
    * 解决管理员在后台删除/提升员工后，员工回到前台权限未更新的问题
+   * 同时处理微信扫码（小程序码）进入的场景
    */
-  onShow() {
+  onShow(options) {
     const now = Date.now()
-    // 活跃用户回到前台时强制刷新鉴权（10 秒节流，避免频繁请求）
     if (this.globalData.accessState === 'active' && now - this.globalData._lastAuthSyncTime >= 10000) {
       this.refreshAuthContext()
+    }
+    // 兜底：扫码进入时解析 scene 并跳转工单详情
+    if (options && options.query && options.query.scene) {
+      const scene = decodeURIComponent(options.query.scene)
+      if (scene && /^GD\d{11,}$/.test(scene)) {
+        const pages = getCurrentPages()
+        const currentPage = pages[pages.length - 1]
+        if (!currentPage || currentPage.route !== 'pages/order-detail/index' || currentPage.options.scene !== scene) {
+          wx.navigateTo({ url: '/pages/order-detail/index?scene=' + scene })
+        }
+      }
     }
   },
 
@@ -185,7 +196,7 @@ App({
       const list = wx.getStorageSync('errorLogs') || []
       list.unshift({ type, detail: String(detail), at: new Date().toISOString() })
       wx.setStorageSync('errorLogs', list.slice(0, 50))
-    } catch (e) { /* ignore */ }
+    } catch (e) { console.error('[app] logError 写入失败:', e) }
   },
 
   /**
@@ -329,10 +340,10 @@ App({
     this.globalData._kickoutModalShown = false
     // 立即执行一次检查
     this._checkUserAccessStatus()
-    // 每 3 秒轮询，确保账号被删除后实时踢出
+    // 每 30 秒轮询，确保账号被删除后实时踢出（降低云函数调用量）
     this.globalData._permissionWatcherTimer = setInterval(() => {
       this._checkUserAccessStatus()
-    }, 3000)
+    }, 30000)
   },
 
   /**

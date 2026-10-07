@@ -272,7 +272,25 @@
 .qr-wrap {
   margin-top: 16rpx;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+}
+
+.qr-text-wrap {
+  margin-top: 24rpx;
+  padding-top: 20rpx;
+  border-top: 1rpx dashed #e2e8f0;
+}
+
+.qr-label {
+  font-size: 24rpx;
+  color: #475569;
+  margin-bottom: 12rpx;
+  text-align: center;
+}
+.qr-label-text {
+  color: #94a3b8;
+  font-size: 22rpx;
 }
 
 .qr-image {
@@ -281,6 +299,12 @@
   border-radius: 20rpx;
   background: #ffffff;
   border: 1rpx solid #e2e8f0;
+}
+
+.qr-image-text {
+  width: 240rpx;
+  height: 240rpx;
+  opacity: 0.85;
 }
 
 .qr-note {
@@ -773,4 +797,147 @@
   color: #94a3b8;
   font-size: 26rpx;
   padding: 60rpx 0;
+}
+
+/* ===== 删除图纸确认弹窗(自定义,绕开 wx.showModal 被吞) ===== */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.modal-content {
+  width: min(560rpx, 88vw);
+  background: #ffffff;
+  border-radius: 16rpx;
+  padding: 36rpx 32rpx 28rpx;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-content-danger {
+  border-top: 6rpx solid #dc2626;
+}
+
+.modal-title {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 16rpx;
+}
+
+.modal-text {
+  font-size: 26rpx;
+  line-height: 1.6;
+  color: #475569;
+  margin-bottom: 24rpx;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 16rpx;
+  justify-content: flex-end;
+}
+
+.modal-btn {
+  padding: 16rpx 36rpx;
+  border-radius: 999rpx;
+  font-size: 26rpx;
+  border: 1rpx solid transparent;
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.modal-btn.cancel {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.modal-btn.danger {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+/* ===== 编辑工单字段 ===== */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  flex-shrink: 0; /* 防止被父 flex 挤压,badge "未开始" 等竖排 */
+}
+
+.btn-edit,
+.btn-save-top {
+  font-size: 22rpx;
+  padding: 8rpx 16rpx;
+  border-radius: 999rpx;
+  background: linear-gradient(135deg, #0f766e, #0d9488);
+  color: #ffffff;
+  line-height: 1.5;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.btn-edit:active,
+.btn-save-top:active {
+  opacity: 0.85;
+}
+
+.btn-disabled {
+  opacity: 0.6;
+}
+
+.edit-fields {
+  margin-top: 16rpx;
+}
+
+.edit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12rpx 24rpx;
+}
+
+.edit-input {
+  width: 100%;
+  padding: 10rpx 16rpx;
+  background: #ffffff;
+  border: 1rpx solid #cbd5e1;
+  border-radius: 8rpx;
+  font-size: 26rpx;
+  color: #0f172a;
+  box-sizing: border-box;
+}
+
+.edit-input:focus {
+  border-color: #0f766e;
+}
+
+.detail-input {
+  background: #f8fafc;
+  font-size: 24rpx;
+  padding: 8rpx 14rpx;
+}
+
+.edit-actions {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 16rpx;
+  justify-content: flex-end;
+  padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom)) 32rpx;
+  background: rgba(255, 255, 255, 0.96);
+  border-top: 1rpx solid #e2e8f0;
+  box-shadow: 0 -4rpx 12rpx rgba(15, 23, 42, 0.08);
+  z-index: 50;
+}
+
+/* 编辑模式时为页面底部留出固定按钮高度,避免遮挡最后一张卡片 */
+.page-order-detail.editing-mode {
+  padding-bottom: 140rpx;
 }

@@ -166,6 +166,13 @@
 .metric-processing .metric-value { color: #0d9488; }
 .metric-processing:active { background: #ccfbf1; }
 
+/* 未开始 - 中性灰(待启动,没有进度) */
+.metric-notstarted {
+  border-left-color: #94a3b8;
+}
+.metric-notstarted .metric-value { color: #64748b; }
+.metric-notstarted:active { background: #f1f5f9; }
+
 .section {
   margin-top: 24rpx;
   padding: 24rpx;

@@ -1,4 +1,4 @@
-<view wx:if="{{order}}" class="container page-order-detail">
+<view wx:if="{{order}}" class="container page-order-detail {{editingFields ? 'editing-mode' : ''}}">
   <view class="top-left-home" bindtap="goToHome">
     <text class="home-icon">⌂</text>
   </view>
@@ -8,10 +8,15 @@
         <view class="title">{{order.id}}</view>
         <view class="subtle">{{order.customerName}}</view>
       </view>
-      <text class="badge {{order.paused ? 'badge-warning' : order.status === 'completed' ? 'badge-success' : order.overdue ? 'badge-danger' : order.urgent ? 'badge-urgent' : 'badge-info'}}">{{order.statusLabel}}</text>
+      <view class="row-actions">
+        <view wx:if="{{isAdmin && order.status !== 'completed' && !editingFields}}" class="btn-edit" bindtap="enterEditFields">编辑</view>
+        <view wx:if="{{isAdmin && order.status !== 'completed' && editingFields}}" class="btn-save-top {{editBtnLoading ? 'btn-disabled' : ''}}" bindtap="saveEditFields">{{editBtnLoading ? '保存中' : '保存'}}</view>
+        <text class="badge {{order.paused ? 'badge-warning' : order.status === 'completed' ? 'badge-success' : order.overdue ? 'badge-danger' : order.urgent ? 'badge-urgent' : 'badge-info'}}">{{order.statusLabel}}</text>
+      </view>
     </view>
 
-    <view class="summary-grid">
+    <!-- 展示模式:基础字段 -->
+    <view wx:if="{{!editingFields}}" class="summary-grid">
       <view class="field-item"><text class="field-label">种类</text><text class="field-value">{{order.type}}</text></view>
       <view class="field-item"><text class="field-label">尺寸</text><text class="field-value">{{order.size}}</text></view>
       <view class="field-item"><text class="field-label">数量</text><text class="field-value">{{order.qty}}</text></view>
@@ -21,6 +26,44 @@
       <view class="field-item"><text class="field-label">交期</text><text class="field-value">{{order.dueDate}}</text></view>
       <view class="field-item"><text class="field-label">下单日期</text><text class="field-value">{{order.orderDate}}</text></view>
       <view class="field-item" wx:if="{{order.completedDate}}"><text class="field-label">完成日期</text><text class="field-value">{{order.completedDate}}</text></view>
+    </view>
+
+    <!-- 编辑模式:基础字段(可改) + 备注 -->
+    <view wx:else class="edit-fields">
+      <view class="edit-grid">
+        <view class="field-item">
+          <text class="field-label">种类 *</text>
+          <input class="edit-input" value="{{editFieldsDraft.type}}" data-key="type" bindinput="onEditFieldInput" />
+        </view>
+        <view class="field-item">
+          <text class="field-label">尺寸 *</text>
+          <input class="edit-input" value="{{editFieldsDraft.size}}" data-key="size" bindinput="onEditFieldInput" />
+        </view>
+        <view class="field-item">
+          <text class="field-label">数量 *</text>
+          <input class="edit-input" type="number" value="{{editFieldsDraft.qty}}" data-key="qty" bindinput="onEditFieldInput" />
+        </view>
+        <view class="field-item">
+          <text class="field-label">单号</text>
+          <input class="edit-input" value="{{editFieldsDraft.singleNo}}" data-key="singleNo" bindinput="onEditFieldInput" />
+        </view>
+        <view class="field-item">
+          <text class="field-label">材质 *</text>
+          <input class="edit-input" value="{{editFieldsDraft.material}}" data-key="material" bindinput="onEditFieldInput" />
+        </view>
+        <view class="field-item">
+          <text class="field-label">交期</text>
+          <input class="edit-input" type="date" value="{{editFieldsDraft.dueDate}}" data-key="dueDate" bindinput="onEditFieldInput" />
+        </view>
+        <view class="field-item">
+          <text class="field-label">下单日期</text>
+          <input class="edit-input" type="date" value="{{editFieldsDraft.orderDate}}" data-key="orderDate" bindinput="onEditFieldInput" />
+        </view>
+        <view class="field-item">
+          <text class="field-label">备注</text>
+          <input class="edit-input" value="{{editFieldsDraft.remarks}}" data-key="remarks" bindinput="onEditFieldInput" />
+        </view>
+      </view>
     </view>
 
     <view class="progress-block">
@@ -77,7 +120,7 @@
     </view>
 
     <block wx:else>
-      <block wx:for="{{order.steps}}" wx:key="key">
+      <block wx:for="{{order.steps}}" wx:key="_stepKey">
         <view class="step-item {{index < order.currentStepIndex ? 'done' : index === order.currentStepIndex ? 'current' : ''}}">
           <view class="step-dot"></view>
           <view class="step-body">
@@ -102,14 +145,17 @@
 
     <view class="drawing-grid" wx:if="{{hasDrawings}}">
       <block wx:for="{{drawingUrls}}" wx:key="*this">
-        <image
-          class="drawing-thumb"
-          src="{{item}}"
-          mode="aspectFill"
-          data-urls="{{drawingUrls}}"
-          data-index="{{index}}"
-          bindtap="previewDrawing"
-        />
+        <view class="drawing-thumb drawing-uploaded">
+          <image
+            class="drawing-thumb-img"
+            src="{{item}}"
+            mode="aspectFill"
+            data-urls="{{drawingUrls}}"
+            data-index="{{index}}"
+            bindtap="previewDrawing"
+          />
+          <view wx:if="{{isAdmin}}" class="drawing-delete" data-index="{{index}}" bindtap="deleteUploadedDrawing">×</view>
+        </view>
       </block>
       <block wx:for="{{pendingDrawings}}" wx:key="name">
         <view class="drawing-thumb drawing-pending">
@@ -127,17 +173,29 @@
     </view>
   </view>
 
-  <view wx:if="{{order.drawingDetail && (order.drawingDetail.blankingRoughness || order.drawingDetail.productRoughness || order.drawingDetail.length || order.drawingDetail.topHoleThread || order.drawingDetail.topHole || order.drawingDetail.crossHole || order.drawingDetail.squareHead)}}" class="section card">
+  <view wx:if="{{order.drawingDetail && (order.drawingDetail.blankingRoughness || order.drawingDetail.productRoughness || order.drawingDetail.length || order.drawingDetail.blankingLength || order.drawingDetail.topHoleThread || order.drawingDetail.crossHole || order.drawingDetail.squareHead) || editingFields}}" class="section card">
     <view class="section-title">图纸细节</view>
-    <view class="detail-grid">
+    <!-- 展示模式 -->
+    <view wx:if="{{!editingFields}}" class="detail-grid">
       <view class="detail-item"><text class="detail-label">下单数量</text><text class="detail-sep">：</text><text class="detail-value highlight">{{order.qty}}</text></view>
       <view wx:if="{{order.drawingDetail.blankingRoughness}}" class="detail-item"><text class="detail-label">下料粗度</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.blankingRoughness}}</text></view>
       <view wx:if="{{order.drawingDetail.productRoughness}}" class="detail-item"><text class="detail-label">成品粗度</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.productRoughness}}</text></view>
       <view wx:if="{{order.drawingDetail.length}}" class="detail-item"><text class="detail-label">长度</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.length}}</text></view>
+      <view wx:if="{{order.drawingDetail.blankingLength}}" class="detail-item"><text class="detail-label">下料长度</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.blankingLength}}</text></view>
       <view wx:if="{{order.drawingDetail.topHoleThread}}" class="detail-item"><text class="detail-label">顶孔螺纹</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.topHoleThread}}</text></view>
-      <view wx:if="{{order.drawingDetail.topHole}}" class="detail-item"><text class="detail-label">顶孔</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.topHole}}</text></view>
       <view wx:if="{{order.drawingDetail.crossHole}}" class="detail-item"><text class="detail-label">横孔</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.crossHole}}</text></view>
       <view wx:if="{{order.drawingDetail.squareHead}}" class="detail-item full-width"><text class="detail-label">方头</text><text class="detail-sep">：</text><text class="detail-value">{{order.drawingDetail.squareHead}}</text></view>
+    </view>
+    <!-- 编辑模式:7 个图纸细节字段全部可填 -->
+    <view wx:else class="detail-grid">
+      <view class="detail-item"><text class="detail-label">下单数量</text><text class="detail-sep">：</text><text class="detail-value highlight">{{order.qty}}</text></view>
+      <view class="detail-item"><text class="detail-label">下料粗度</text><input class="edit-input detail-input" value="{{editDetailDraft.blankingRoughness}}" data-key="blankingRoughness" bindinput="onEditDetailInput" /></view>
+      <view class="detail-item"><text class="detail-label">成品粗度</text><input class="edit-input detail-input" value="{{editDetailDraft.productRoughness}}" data-key="productRoughness" bindinput="onEditDetailInput" /></view>
+      <view class="detail-item"><text class="detail-label">长度</text><input class="edit-input detail-input" value="{{editDetailDraft.length}}" data-key="length" bindinput="onEditDetailInput" /></view>
+      <view class="detail-item"><text class="detail-label">下料长度</text><input class="edit-input detail-input" value="{{editDetailDraft.blankingLength}}" data-key="blankingLength" bindinput="onEditDetailInput" /></view>
+      <view class="detail-item"><text class="detail-label">顶孔螺纹</text><input class="edit-input detail-input" value="{{editDetailDraft.topHoleThread}}" data-key="topHoleThread" bindinput="onEditDetailInput" /></view>
+      <view class="detail-item"><text class="detail-label">横孔</text><input class="edit-input detail-input" value="{{editDetailDraft.crossHole}}" data-key="crossHole" bindinput="onEditDetailInput" /></view>
+      <view class="detail-item full-width"><text class="detail-label">方头</text><input class="edit-input detail-input" value="{{editDetailDraft.squareHead}}" data-key="squareHead" bindinput="onEditDetailInput" /></view>
     </view>
   </view>
 
@@ -148,10 +206,26 @@
   <view class="section card">
     <view class="section-title">订单二维码</view>
     <view class="subtle">二维码内容绑定工单号：{{order.qrContent || order.id}}</view>
-    <view class="qr-wrap">
+
+    <!-- 主码：微信小程序码（太阳码） -->
+    <view wx:if="{{order.qrCodeFileID}}" class="qr-wrap">
+      <view class="qr-label">微信小程序码（员工用微信扫码直接进入）</view>
       <image class="qr-image" src="{{order.qrUrl}}" mode="widthFix" />
     </view>
-    <view class="subtle qr-note">员工扫码后可直接进入该订单详情，随后按权限点击已完成并流转。</view>
+
+    <!-- 备用码：文本二维码（小程序内扫码用） -->
+    <view class="qr-wrap qr-text-wrap">
+      <view class="qr-label qr-label-text">备用文本二维码（小程序内扫码或手动输入工单号）</view>
+      <image class="qr-image qr-image-text" src="{{order.textQrUrl}}" mode="widthFix" />
+    </view>
+
+    <view class="subtle qr-note">
+      <block wx:if="{{order.qrCodeFileID}}">微信扫码识别太阳码后可直接进入该工单详情</block>
+      <block wx:else>当前仅文本二维码，点击下方按钮生成微信小程序码</block>
+    </view>
+    <button wx:if="{{isAdmin}}" class="secondary-btn" style="margin-top:12rpx" bindtap="regenerateWxacode" loading="{{qrRegenerating}}">
+      {{qrRegenerating ? '生成中...' : (order.qrCodeFileID ? '重新生成小程序码' : '点击生成微信小程序码')}}
+    </button>
   </view>
 
   <view class="section card action-panel">
@@ -276,5 +350,11 @@
       </block>
       <view wx:if="{{activeEmployees.length === 0}}" class="op-empty">暂无可选员工</view>
     </scroll-view>
+  </view>
+
+  <!-- 编辑工单字段保存/取消按钮(仅编辑模式) -->
+  <view wx:if="{{editingFields}}" class="edit-actions">
+    <button class="secondary-btn" bindtap="cancelEditFields" disabled="{{editBtnLoading}}">取消</button>
+    <button class="primary-btn" bindtap="saveEditFields" loading="{{editBtnLoading}}" disabled="{{editBtnLoading}}">保存修改</button>
   </view>
 </view>

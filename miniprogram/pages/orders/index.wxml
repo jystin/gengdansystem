@@ -8,32 +8,40 @@
       <view class="title">工单列表</view>
       <view class="header-btns">
         <button wx:if="{{isAdmin}}" size="mini" class="mini-btn {{selectMode ? 'active' : ''}}" bindtap="toggleSelectMode">{{selectMode ? '取消' : '导出'}}</button>
+        <button wx:if="{{isAdmin}}" size="mini" class="mini-btn delete-btn {{deleteMode ? 'active' : ''}}" bindtap="toggleDeleteMode">{{deleteMode ? '取消' : '删除'}}</button>
         <button size="mini" class="mini-btn" bindtap="openScan">扫码</button>
       </view>
     </view>
 
-    <!-- 管理员操作栏：选择模式下显示 -->
+    <!-- 管理员操作栏：导出模式 -->
     <view wx:if="{{isAdmin && selectMode}}" class="export-bar">
       <view class="export-info">已选 {{selectedCount}} 项</view>
       <view class="export-btns">
-        <button class="export-btn primary" bindtap="exportSelected" disabled="{{selectedIds.length === 0}}">导出选中</button>
+        <button class="export-btn primary" bindtap="exportSelected" disabled="{{selectedCount === 0}}">导出选中</button>
         <button class="export-btn secondary" bindtap="showDateRangePicker">按时间导出</button>
         <button class="export-btn secondary" bindtap="showCustomerPicker">按客户导出</button>
+        <button class="export-btn secondary" bindtap="exportCompleted">一键导出已完成</button>
         <button class="export-btn secondary" bindtap="exportAll">导出全部</button>
       </view>
     </view>
 
-    <!-- 分类标签 + 搜索框 合并一行 -->
+    <!-- 管理员操作栏：删除模式 -->
+    <view wx:if="{{isAdmin && deleteMode}}" class="export-bar delete-bar">
+      <view class="export-info">已选 {{selectedCount}} 项（仅可勾选已完成或未开始的工单）</view>
+      <view class="export-btns">
+        <button class="export-btn danger" bindtap="confirmSafeDelete">安全删除选中</button>
+      </view>
+    </view>
+
+    <!-- 分类标签(支持换行,7 个标签可在窄屏自动两行) -->
     <view class="filter-row">
-      <scroll-view scroll-x class="category-scroll" show-scrollbar="{{false}}">
-        <view class="category-bar">
-          <block wx:for="{{categoryOptions}}" wx:key="key">
-            <view class="category-pill {{activeCategory === item.key ? 'active' : ''}}" bindtap="onCategoryTap" data-category="{{item.key}}">
-              <text>{{item.label}}</text>
-            </view>
-          </block>
-        </view>
-      </scroll-view>
+      <view class="category-bar">
+        <block wx:for="{{categoryOptions}}" wx:key="key">
+          <view class="category-pill {{activeCategory === item.key ? 'active' : ''}}" bindtap="onCategoryTap" data-category="{{item.key}}">
+            <text>{{item.label}}</text>
+          </view>
+        </block>
+      </view>
     </view>
 
     <view class="search-box">
@@ -43,16 +51,16 @@
 
   <view class="list card">
     <block wx:for="{{filteredOrders}}" wx:key="id">
-      <view class="order-card {{item.urgent ? 'urgent' : ''}} {{selectMode ? 'select-mode' : ''}}" bindtap="{{selectMode ? 'toggleSelect' : 'openOrder'}}" data-id="{{item.id}}">
+      <view class="order-card {{item.urgent ? 'urgent' : ''}} {{selectMode ? 'select-mode' : ''}} {{deleteMode && !item._deletable ? 'disabled' : ''}}" bindtap="{{selectMode ? 'toggleSelect' : (deleteMode ? 'toggleSelect' : 'openOrder')}}" data-id="{{item.id}}">
         <!-- 选择模式：复选框 -->
-        <view wx:if="{{selectMode}}" class="check-wrap" catchtap="toggleSelect" data-id="{{item.id}}">
-          <view class="checkbox {{item._checked ? 'checked' : ''}}"></view>
+        <view wx:if="{{selectMode || deleteMode}}" class="check-wrap" catchtap="toggleSelect" data-id="{{item.id}}">
+          <view class="checkbox {{item._checked ? 'checked' : ''}} {{deleteMode && !item._deletable ? 'disabled' : ''}}"></view>
         </view>
 
         <view class="order-content">
           <view class="row order-top">
             <view class="order-id">{{item.id}}</view>
-            <text class="badge {{item.category === 'paused' ? 'badge-warning' : item.category === 'completed' ? 'badge-success' : item.category === 'overdue' ? 'badge-danger' : item.category === 'urgent' ? 'badge-urgent' : 'badge-info'}}">{{item.categoryLabel}}</text>
+            <text class="badge {{item.category === 'notStarted' ? 'badge-grey' : item.category === 'paused' ? 'badge-warning' : item.category === 'completed' ? 'badge-success' : item.category === 'overdue' ? 'badge-danger' : item.category === 'urgent' ? 'badge-urgent' : 'badge-info'}}">{{item.categoryLabel}}</text>
           </view>
           <view class="subtle">{{item.customerName}}</view>
           <view class="meta-row">
@@ -111,6 +119,20 @@
       <view class="modal-actions">
         <button class="modal-btn cancel" bindtap="hideCustomerPicker">取消</button>
         <button class="modal-btn confirm" bindtap="confirmCustomerExport">确认导出</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 安全删除确认弹窗(自定义,绕开 wx.showModal 被吞的问题) -->
+  <view wx:if="{{showDeleteConfirmModal}}" class="modal-mask" catchtouchmove>
+    <view class="modal-content modal-content-danger">
+      <view class="modal-title">⚠️ 安全删除工单</view>
+      <view class="modal-text">即将永久删除以下 {{deleteConfirmIds.length}} 个工单,删除后无法恢复:</view>
+      <view class="modal-orders-list">{{deleteConfirmContent}}</view>
+      <view class="modal-text">⚠️ 安全删除不会回退库存和月度产量统计(未开始工单本就无影响)。</view>
+      <view class="modal-actions">
+        <button class="modal-btn cancel" bindtap="onCancelDelete">取消</button>
+        <button class="modal-btn danger" bindtap="onConfirmDelete" loading="{{deleteConfirmBtnLoading}}" disabled="{{deleteConfirmBtnLoading}}">确认删除</button>
       </view>
     </view>
   </view>

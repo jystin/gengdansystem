@@ -35,9 +35,12 @@ const BACKUP_COLLECTIONS = [
   'pending_applications'
 ]
 
+// 【修复时区】云函数运行在 UTC，本地时间方法返回 UTC 时间，导致 createdAtText 显示比北京时间差 8 小时
+// 统一使用 UTC+8（北京时间）格式化
 function formatTime(d = new Date()) {
+  const china = new Date(d.getTime() + 8 * 60 * 60 * 1000)
   const pad = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  return `${china.getUTCFullYear()}-${pad(china.getUTCMonth() + 1)}-${pad(china.getUTCDate())} ${pad(china.getUTCHours())}:${pad(china.getUTCMinutes())}:${pad(china.getUTCSeconds())}`
 }
 
 function generateId() {

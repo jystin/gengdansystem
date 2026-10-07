@@ -56,6 +56,7 @@
                 <text class="roughness-stock {{rd.isLow ? 'stock-red' : ''}}">{{rd.stock}} 吨</text>
                 <view wx:if="{{rd.isLow}}" class="rd-tag-low">不足</view>
               </view>
+              <view wx:if="{{isAdmin}}" class="rd-actions" catchtap="removeRoughness" data-material="{{item.name}}" data-roughness="{{rd.roughness}}" data-stock="{{rd.stock}}">删除</view>
             </view>
           </block>
         </view>

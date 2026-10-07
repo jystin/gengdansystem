@@ -73,6 +73,8 @@ exports.main = async (event, context) => {
         }
 
         // 创建/更新 users 集合中的用户
+        // 使用申请记录中的 role（inviteEmployee 时已校验：仅超管可邀请 admin）
+        const appliedRole = (application.role === 'admin' || application.role === 'worker') ? application.role : 'worker'
         let userDoc
         if (application.openid) {
           const existingUser = await db.collection('users').where({ openid: application.openid }).get()
@@ -82,7 +84,7 @@ exports.main = async (event, context) => {
             await db.collection('users').doc(userDoc._id).update({
               data: {
                 status: 'active',
-                role: 'worker',
+                role: appliedRole,
                 stations: application.stations || [],
                 name: application.name,
                 updatedAt: db.serverDate()
@@ -93,7 +95,7 @@ exports.main = async (event, context) => {
             const newUser = {
               openid: application.openid,
               name: application.name,
-              role: 'worker',
+              role: appliedRole,
               stations: application.stations || [],
               status: 'active',
               createdAt: db.serverDate(),
@@ -107,7 +109,7 @@ exports.main = async (event, context) => {
           // 无openid（通过邀请码申请的），也创建用户记录
           const newUser = {
             name: application.name,
-            role: 'worker',
+            role: appliedRole,
             stations: application.stations || [],
             status: 'active',
             deviceId: application.deviceId || '',

@@ -164,7 +164,8 @@ async function deductStock(material, qty, user, note, orderId, roughness) {
   const rKey = String(roughness)
   const qtyNum = Number(qty)
 
-  // 使用原子操作：先查询并验证库存，再使用inc原子扣减
+  // 先查询库存：用于快速失败提示（避免无谓的 update 调用）和获取 invId
+  // 注意：此处的 check 只是优化体验，真正的并发安全由下方 where + inc 原子操作保证
   const invRes = await db.collection('inventory').where({ name: material }).get()
   if (invRes.data.length === 0) throw new Error(`${material} 库存不存在`)
 
@@ -175,17 +176,29 @@ async function deductStock(material, qty, user, note, orderId, roughness) {
     throw new Error(`${material} φ${rKey} 库存不足，当前剩余 ${currentStock.toFixed(4)} 吨`)
   }
 
-  // 使用原子inc操作扣减库存，防止并发问题
+  // 【原子保护】使用 where 条件 + inc 一步完成：只有 stock[rKey] >= qtyNum 时才执行扣减
+  // 数据库引擎层面保证不会扣成负数，杜绝并发超扣，无需 check-then-inc 两步
+  const _ = db.command
   const updatePath = `stock.${rKey}`
-  const updateRes = await db.collection('inventory').doc(inv._id).update({
+  const updateRes = await db.collection('inventory').where({
+    _id: inv._id,
+    [updatePath]: _.gte(qtyNum)
+  }).update({
     data: {
-      [updatePath]: db.command.inc(-qtyNum),
+      [updatePath]: _.inc(-qtyNum),
       lastUpdatedAt: db.serverDate()
     }
   })
 
   if (updateRes.stats.updated === 0) {
-    throw new Error('库存扣减失败，请重试')
+    // 库存已被并发占用，扣减失败
+    let remainStock = 0
+    try {
+      const invNow = await db.collection('inventory').doc(inv._id).get()
+      const s = Number((invNow.data.stock || {})[rKey])
+      remainStock = Number.isFinite(s) ? s : 0
+    } catch (e) { /* 忽略 */ }
+    throw new Error(`${material} φ${rKey} 库存不足（可能被并发占用），当前剩余 ${remainStock.toFixed(4)} 吨`)
   }
 
   // 异步记录日志（不阻塞主流程）
@@ -280,6 +293,43 @@ async function getLogs() {
   }
 }
 
+// 删除指定材料的某个粗度库存（管理员）
+async function removeRoughness(material, roughness, user, note) {
+  requireAdmin(user)
+  if (!material) throw new Error('材料不能为空')
+  if (roughness === undefined || roughness === null || roughness === '' || isNaN(Number(roughness))) {
+    throw new Error('粗度无效')
+  }
+  const rKey = String(roughness)
+
+  const invRes = await db.collection('inventory').where({ name: material }).get()
+  if (invRes.data.length === 0) throw new Error('材料不存在')
+  const inv = invRes.data[0]
+  const oldQty = Number((inv.stock || {})[rKey] || 0)
+
+  // 用 unset 移除该粗度字段
+  await db.collection('inventory').doc(inv._id).update({
+    data: {
+      [`stock.${rKey}`]: db.command.remove(),
+      lastUpdatedAt: db.serverDate()
+    }
+  })
+
+  try {
+    await db.collection('material_logs').add({
+      data: { type: 'remove', material, roughness: rKey, qty: oldQty, operator: user.name, operatorId: user._id, note: note || `删除粗度库存：${material} φ${rKey}（${oldQty} 吨）`, createdAt: db.serverDate() }
+    })
+  } catch (e) { /* 非关键 */ }
+
+  try {
+    await db.collection('audit_logs').add({
+      data: { action: '删除粗度库存', targetName: `${material} φ${rKey}（${oldQty} 吨）`, operatorId: user._id, operatorName: user.name, createdAt: db.serverDate() }
+    })
+  } catch (e) { /* 非关键 */ }
+
+  return await getInventory()
+}
+
 exports.main = async (event, context) => {
   const wxContext = cloud.getWXContext()
   const openid = wxContext.OPENID
@@ -311,6 +361,9 @@ exports.main = async (event, context) => {
 
       case 'addType':
         return { success: true, inventory: await addType(event.name, user) }
+
+      case 'removeRoughness':
+        return { success: true, inventory: await removeRoughness(event.material, event.roughness, user, event.note) }
 
       case 'getLogs':
         return { success: true, logs: await getLogs() }

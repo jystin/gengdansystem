@@ -18,8 +18,8 @@ function emptyCreateForm() {
       blankingRoughness: '',
       productRoughness: '',
       length: '',
+      blankingLength: '',
       topHoleThread: '',
-      topHole: '',
       crossHole: '',
       squareHead: ''
     }
@@ -79,7 +79,7 @@ Page({
       ui.showLoading('加载中...')
       const [dashboard, orders, employees, logs] = await Promise.all([
         api.getDashboard().catch(() => null),
-        api.listOrders(1, 100).catch(() => []),
+        api.listOrders(1, 20).catch(() => []),
         api.listEmployees().catch(() => []),
         api.listLogs(2).catch(() => [])
       ])
@@ -560,7 +560,7 @@ Page({
       // 全量重新加载管理页面数据
       const [dashboard, orders, employees, logs] = await Promise.all([
         api.getDashboard().catch(() => null),
-        api.listOrders(1, 100).catch(() => []),
+        api.listOrders(1, 20).catch(() => []),
         api.listEmployees().catch(() => []),
         api.listLogs(2).catch(() => [])
       ])

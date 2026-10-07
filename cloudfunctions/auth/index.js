@@ -57,8 +57,15 @@ exports.main = async (event, context) => {
     const openid = wxContext.OPENID || ''
 
     switch (action) {
-      case 'login':
-        return await login({ openid, deviceId })
+      case 'login': {
+        const result = await login({ openid, deviceId })
+        // 【增强可观测性】TOKEN_SECRET 未配置时返回 warning，供前端/日志提示：
+        // 当前使用随机密钥，云函数重启后所有已登录用户的 token 将失效
+        if (result && result.success && result.token && !process.env.TOKEN_SECRET) {
+          result.warning = '系统未配置 TOKEN_SECRET 环境变量，当前使用随机密钥，云函数重启后所有登录态将失效。请在云开发控制台为 auth 云函数配置 TOKEN_SECRET。'
+        }
+        return result
+      }
 
       case 'ping':
         return {
@@ -85,7 +92,7 @@ exports.main = async (event, context) => {
           stations: safeEvent.stations || [],
           openid: openid
         })
-      
+
       default:
         return { success: false, error: '未知的操作类型' }
     }
@@ -140,7 +147,7 @@ async function login({ openid, deviceId }) {
         user = deviceUserRes.data[0]
       }
     } catch (err) {
-      // 静默处理
+      console.error('[auth] deviceId 查询用户失败:', err.message)
     }
   }
 
@@ -157,7 +164,7 @@ async function login({ openid, deviceId }) {
           try {
             const userRes = await db.collection('users').doc(approved.userId).get()
             if (userRes.data) user = userRes.data
-          } catch (e) { /* userId 引用可能失效 */ }
+          } catch (e) { console.error('[auth] userId 引用失效:', e.message) }
         }
       }
     } catch (err) {
@@ -336,6 +343,13 @@ async function submitJoinApplication({ deviceId, name, stations, openid }) {
   if (normalizedStations.length === 0) {
     return { success: false, error: '请至少选择一个岗位' }
   }
+  // 姓名校验：长度 2-20，不能纯数字
+  if (normalizedName.length < 2 || normalizedName.length > 20) {
+    return { success: false, error: '姓名长度需在 2-20 个字符之间' }
+  }
+  if (/^\d+$/.test(normalizedName)) {
+    return { success: false, error: '姓名不能为纯数字' }
+  }
 
   const db = getDb()
 
@@ -397,13 +411,15 @@ async function submitJoinApplication({ deviceId, name, stations, openid }) {
       await db.collection('audit_logs').add({
         data: {
           action: '更新入驻申请',
-          userId: existingApp._id,
-          userName: normalizedName,
-          deviceId: normalizedDeviceId,
-          timestamp: db.serverDate()
+          targetId: existingApp._id,
+          targetName: normalizedName,
+          operatorId: existingApp._id,
+          operatorName: normalizedName,
+          detail: { deviceId: normalizedDeviceId },
+          createdAt: db.serverDate()
         }
       })
-    } catch (e) { /* 非关键：审计日志写入失败不应影响主流程 */ }
+    } catch (e) { console.error('[auth] 审计日志写入失败:', e.message) }
 
     return {
       success: true,
@@ -426,17 +442,19 @@ async function submitJoinApplication({ deviceId, name, stations, openid }) {
   }
   const application = { _id: addRes._id, ...applicationData }
 
-  try {
-    await db.collection('audit_logs').add({
-      data: {
-        action: '提交入驻申请',
-        userId: application._id,
-        userName: normalizedName,
-        deviceId: normalizedDeviceId,
-        timestamp: db.serverDate()
-      }
-    })
-  } catch (e) { /* 非关键：审计日志写入失败不应影响主流程 */ }
+    try {
+      await db.collection('audit_logs').add({
+        data: {
+          action: '提交入驻申请',
+          targetId: application._id,
+          targetName: normalizedName,
+          operatorId: application._id,
+          operatorName: normalizedName,
+          detail: { deviceId: normalizedDeviceId },
+          createdAt: db.serverDate()
+        }
+      })
+    } catch (e) { console.error('[auth] 审计日志写入失败:', e.message) }
 
   return {
     success: true,

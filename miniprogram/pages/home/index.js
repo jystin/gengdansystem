@@ -56,7 +56,7 @@ Page({
       ui.showLoading('加载中...')
       const [dashboard, orders, logs] = await Promise.all([
         api.getDashboard().catch(() => null),
-        api.listOrders(1, 100).catch(() => []),
+        api.listOrders(1, 20).catch(() => []),
         api.listLogs(2).catch(() => [])
       ])
       if (!this._isPageAlive) return

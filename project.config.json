@@ -8,10 +8,10 @@
   },
   "setting": {
     "urlCheck": true,
-    "es6": false,
+    "es6": true,
     "postcss": true,
     "minified": true,
-    "enhance": false,
+    "enhance": true,
     "compileHotReLoad": false,
     "showShadowRootInWxmlPanel": true,
     "checkSiteMap": false,

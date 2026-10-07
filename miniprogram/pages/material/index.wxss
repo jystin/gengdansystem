@@ -223,6 +223,18 @@
   border-color: #fecaca;
 }
 
+.rd-actions {
+  font-size: 22rpx;
+  color: #dc2626;
+  padding: 6rpx 16rpx;
+  border: 1rpx solid #fecaca;
+  border-radius: 6rpx;
+  background: #fff;
+}
+.rd-actions:active {
+  background: #fef2f2;
+}
+
 .roughness-info {
   display: flex;
   align-items: baseline;

@@ -57,6 +57,14 @@
       </view>
       <text class="metric-arrow">›</text>
     </view>
+
+    <view class="metric card metric-notstarted" bindtap="goOrdersByCategory" data-category="notStarted">
+      <view class="metric-left">
+        <text class="metric-value">{{dashboard.notStarted || 0}}</text>
+        <text class="metric-label">未开始</text>
+      </view>
+      <text class="metric-arrow">›</text>
+    </view>
   </view>
 
   <view class="section card">
@@ -69,7 +77,7 @@
       <view class="order-item {{item.urgent ? 'urgent' : ''}}" bindtap="openOrder" data-id="{{item.id}}">
         <view class="row order-line">
           <text class="order-id">{{item.id}}</text>
-          <text class="badge {{item.paused ? 'badge-warning' : item.status === 'completed' ? 'badge-success' : item.overdue ? 'badge-danger' : item.urgent ? 'badge-urgent' : 'badge-info'}}">{{item.statusLabel}}</text>
+          <text class="badge {{item.category === 'notStarted' ? 'badge-grey' : item.category === 'paused' ? 'badge-warning' : item.category === 'completed' ? 'badge-success' : item.category === 'overdue' ? 'badge-danger' : item.category === 'urgent' ? 'badge-urgent' : 'badge-info'}}">{{item.statusLabel}}</text>
         </view>
         <view class="subtle">{{item.customerName}}</view>
         <view class="order-meta">
