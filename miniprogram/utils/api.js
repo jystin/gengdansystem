@@ -141,26 +141,46 @@ function clearCache() {
 }
 
 // =====================================================================
-// 常量：与后端 4 处同步（utils/api.js / orderManager / completeStep / init-db）
+// 常量：与后端 5 处同步（utils/api.js / orderManager / completeStep /
+//                         createOrder / init-db）
 // =====================================================================
 
+// 工序库（与后端 4 处保持一致：orderManager / completeStep / createOrder / init-db）
+//
+//   needPartner:    该工序完成后必须指定一名「配合人员」（默认是编程员）
+//   partnerKeyword: 配合人员的岗位关键字（默认「编程」）——用于筛人 + 后端校验
+//   partnerLabel:   配合人员的界面称谓（默认「编程员」）——如打字工序为「调字员」
+//   repeatable + maxRepeat: 可重复多道（精车最多4道）
+//   兼容：旧字段 needProgrammer 仍然被识别（等价于 needPartner）
 const PROCESS_LIBRARY = [
   { key: 'blanking', name: '下料', station: '下料工' },
-  { key: 'pressing', name: '敦压', station: '敦压工' },
-  { key: 'programming', name: '编程', station: '编程工' },
-  { key: 'pulling_tail', name: '拉尾子', station: '拉尾工' },
-  { key: 'finish_turning', name: '精车', station: '精车工' },
-  { key: 'milling_head', name: '铣方头', station: '铣床工' },
+  { key: 'pressing', name: '敦压', station: '敦压工', needPartner: true },
+  { key: 'pulling_tail', name: '拉尾子', station: '拉尾工', needPartner: true },
+  { key: 'finish_turning', name: '精车', station: '精车工', needPartner: true, repeatable: true, maxRepeat: 4 },
+  { key: 'milling_head', name: '铣方头', station: '铣床工', needPartner: true },
   { key: 'tapping', name: '攻丝', station: '攻丝工' },
   { key: 'drilling_head', name: '打方头孔', station: '钻床工' },
   { key: 'tapping_repeat', name: '攻丝（复攻）', station: '攻丝工' },
   { key: 'threading', name: '压螺纹', station: '螺纹工' },
   { key: 'polishing', name: '压光', station: '抛光工' },
-  { key: 'marking', name: '打字', station: '打字工' },
+  { key: 'marking', name: '打字', station: '打字工', needPartner: true, partnerKeyword: '调字', partnerLabel: '调字员' },
   { key: 'heat_treatment', name: '热处理', station: '热处理工' },
   { key: 'quality_check', name: '质检', station: '质检员' },
   { key: 'warehouse', name: '入库', station: '仓管员' }
 ]
+
+// 已下线的工序：不再出现在「可选工序」列表（新建/编辑工单选不到），
+// 但老工单的 stepKeys 里可能还带着「编程」，buildSteps / getProcessByKey
+// 必须仍能解析，否则历史工单会丢工序、撤回/完成也会找不到对应定义。
+const LEGACY_PROCESSES = {
+  programming: { key: 'programming', name: '编程', station: '编程工' }
+}
+
+// 配合人员默认配置（默认即「编程员」）
+const DEFAULT_PARTNER_KEYWORD = '编程'
+const DEFAULT_PARTNER_LABEL = '编程员'
+// 兼容旧命名
+const PROGRAMMER_KEYWORD = DEFAULT_PARTNER_KEYWORD
 
 const ROUGHNESS_COEFFICIENTS = {
   '5.5': 0.135, '6': 0.228, '6.5': 0.26, '7': 0.302,
@@ -180,8 +200,152 @@ const MATERIAL_TYPES_FALLBACK = [
   '不锈钢420', '不锈钢304', '不锈钢316', '不锈钢431', '铜', '双相钢'
 ]
 
-function getProcessLibrary() { return PROCESS_LIBRARY.slice() }
-function getProcessByKey(key) { return PROCESS_LIBRARY.find(p => p.key === key) }
+// 深拷贝返回，避免调用方修改污染全局常量
+function getProcessLibrary() { return PROCESS_LIBRARY.map(p => ({ ...p })) }
+function getProcessByKey(key) {
+  return PROCESS_LIBRARY.find(p => p.key === key) || LEGACY_PROCESSES[key] || null
+}
+
+/** 某岗位名是否命中关键字（如「编程」「调字」） */
+function isPartnerStation(station, keyword) {
+  return String(station || '').includes(keyword || DEFAULT_PARTNER_KEYWORD)
+}
+
+/** 兼容旧命名：是否编程员岗位 */
+function isProgrammerStation(station) {
+  return isPartnerStation(station, DEFAULT_PARTNER_KEYWORD)
+}
+
+/**
+ * 归一化某工序的「配合人员」配置（兼容旧字段 needProgrammer）
+ * 例：铣方头 → 编程员；打字 → 调字员
+ * @returns {{ need: boolean, keyword: string, label: string }}
+ */
+function resolvePartner(step) {
+  const need = !!(step && (step.needPartner || step.needProgrammer))
+  return {
+    need,
+    keyword: (step && step.partnerKeyword) || DEFAULT_PARTNER_KEYWORD,
+    label: (step && step.partnerLabel) || DEFAULT_PARTNER_LABEL
+  }
+}
+
+/** 非工序岗位：只承担「配合人员」职责，不参与工序流转。
+ *  「编程工」：原「编程」工序已下线，但编程员岗位仍需可分配（敦压/拉尾子/精车/铣方头需要编程员配合）；
+ *  「调字员」：打字工序的配合人员岗位。 */
+const EXTRA_STATIONS = [
+  { station: '编程工', name: '编程' },
+  { station: '调字员', name: '调字' }
+]
+
+/**
+ * 可分配岗位全集 = 工序岗位 + 非工序岗位（如「调字员」）
+ * 供 join（员工自助注册）与 home（管理员分配岗位）共用，保证「调字员」可被分配
+ * @returns {Array<{station:string,name:string}>}
+ */
+function getSelectableStations() {
+  const seen = {}
+  const out = []
+  PROCESS_LIBRARY.forEach(p => {
+    if (p.station && !seen[p.station]) { seen[p.station] = true; out.push({ station: p.station, name: p.name }) }
+  })
+  EXTRA_STATIONS.forEach(s => {
+    if (!seen[s.station]) { seen[s.station] = true; out.push({ station: s.station, name: s.name }) }
+  })
+  return out
+}
+
+/**
+ * 从员工列表中筛出「配合人员」候选：岗位必须含关键字（默认「编程」）
+ * 严格匹配 —— 不再兜底为「全部在职员工」，避免编程员被误当成调字员（反之亦然）。
+ * 若一个都没配，返回空列表 + fallback=true，由调用方提示去员工管理分配岗位。
+ * @param {Array} employees
+ * @param {string} [keyword] 岗位关键字，默认「编程」
+ * @returns {{ list: Array, fallback: boolean }}
+ */
+function pickPartnerEmployees(employees, keyword) {
+  const kw = keyword || DEFAULT_PARTNER_KEYWORD
+  const all = Array.isArray(employees) ? employees : []
+  const list = all.filter(e => (Array.isArray(e.stations) ? e.stations : []).some(s => isPartnerStation(s, kw)))
+  return { list, fallback: list.length === 0 }
+}
+
+/** 兼容旧命名：筛出编程员 */
+function pickProgrammeEmployees(employees) {
+  return pickPartnerEmployees(employees, DEFAULT_PARTNER_KEYWORD)
+}
+
+/**
+ * 从员工列表中筛出「工序操作员」候选：
+ *   - 管理员 / 超管：任何工序都能操作（含代操作）
+ *   - 普通员工：岗位必须精确等于当前工序岗位（如质检工序 → 质检员）
+ * 与后端 completeStep 的岗位校验保持同一口径，避免前端能选、提交才报错。
+ * @param {Array} employees
+ * @param {string} station 当前工序岗位（PROCESS_LIBRARY 的 station，如「质检员」）
+ * @returns {Array}
+ */
+function pickOperatorEmployees(employees, station) {
+  const all = Array.isArray(employees) ? employees : []
+  const st = String(station || '').trim()
+  return all.filter(e => {
+    if (!e) return false
+    if (e.role === 'admin' || e.role === 'superadmin') return true
+    if (!st) return false
+    const stations = Array.isArray(e.stations) ? e.stations : (e.station ? [e.station] : [])
+    return stations.some(s => String(s).trim() === st)
+  })
+}
+
+/**
+ * 把工序加入列表：可重复工序（精车）插到「同名前一道」之后，保持连续；
+ * 其它工序追加到末尾。避免精车2 被排到入库之后。
+ */
+function insertStepSmart(list, step) {
+  const arr = Array.isArray(list) ? list.slice() : []
+  let insertAt = arr.length
+  if (step && step.repeatable) {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i].key === step.key) { insertAt = i + 1; break }
+    }
+  }
+  arr.splice(insertAt, 0, step)
+  return arr
+}
+
+/**
+ * 把 stepKeys 展开成工序对象数组（与后端 buildSteps 行为一致）
+ * 重复工序自动编号：精车 → 精车1 / 精车2 / 精车3 / 精车4
+ * 用于后端响应缺少 steps 时的本地兜底，保证编号/标记不丢。
+ */
+function buildSteps(stepKeys) {
+  const keys = Array.isArray(stepKeys) ? stepKeys : []
+  const totalMap = {}
+  keys.forEach(k => { totalMap[k] = (totalMap[k] || 0) + 1 })
+
+  const seqMap = {}
+  const steps = []
+  keys.forEach((k, i) => {
+    const def = getProcessByKey(k)
+    if (!def) return
+    seqMap[k] = (seqMap[k] || 0) + 1
+    const total = totalMap[k]
+    const partner = resolvePartner(def)
+    steps.push({
+      ...def,
+      // 归一化「配合人员」配置（统一读 needProgrammer / partnerLabel / partnerKeyword）
+      needPartner: partner.need,
+      needProgrammer: partner.need,
+      partnerKeyword: partner.keyword,
+      partnerLabel: partner.label,
+      _index: i,
+      _seq: seqMap[k],
+      _repeatTotal: total,
+      name: total > 1 ? `${def.name}${seqMap[k]}` : def.name
+    })
+  })
+  return steps
+}
+
 function getRoughnessCoefficient(r) {
   const k = String(r).trim()
   if (ROUGHNESS_COEFFICIENTS[k] !== undefined) return ROUGHNESS_COEFFICIENTS[k]
@@ -248,9 +412,17 @@ async function toggleOrderUrgent(orderId, urgent) {
   clearCache()
   return callFunction('orderManager', { action: 'toggleUrgent', orderId, urgent })
 }
-async function revertCompletedStep(orderId, stepKey) {
+/**
+ * 撤回已完成工序
+ * @param {string} orderId
+ * @param {string} stepKey 工序标识
+ * @param {number} [stepIndex] 工序在列表中的下标
+ *   【为什么需要】精车等可重复工序在同一工单里会出现多条相同 stepKey（精车1/精车2/精车3），
+ *   仅凭 stepKey 只能撤回「最后一次完成的那道」，传下标才能精确撤回指定那一道。
+ */
+async function revertCompletedStep(orderId, stepKey, stepIndex) {
   clearCache()
-  const r = await callFunction('orderManager', { action: 'revertStep', orderId, stepKey })
+  const r = await callFunction('orderManager', { action: 'revertStep', orderId, stepKey, stepIndex })
   return r.order || null
 }
 async function updateOrderStepKeys(orderId, stepKeys) {
@@ -258,9 +430,13 @@ async function updateOrderStepKeys(orderId, stepKeys) {
   const r = await callFunction('orderManager', { action: 'updateStepKeys', orderId, stepKeys })
   return r.order || null
 }
-async function updateOrderDrawings(orderId, drawings) {
+/**
+ * 更新工单图纸
+ * @param {string} [mode] 'append'(默认,追加新上传) | 'replace'(整体覆盖,删除后用)
+ */
+async function updateOrderDrawings(orderId, drawings, mode) {
   clearCache()
-  return callFunction('orderManager', { action: 'updateDrawings', orderId, drawings })
+  return callFunction('orderManager', { action: 'updateDrawings', orderId, drawings, mode })
 }
 // 编辑工单核心字段(防下错单)
 async function updateOrderFields(orderId, fields) {
@@ -584,6 +760,19 @@ module.exports = {
   MATERIAL_TYPES_FALLBACK,
   getProcessLibrary,
   getProcessByKey,
+  buildSteps,
+  insertStepSmart,
+  PROGRAMMER_KEYWORD,
+  DEFAULT_PARTNER_KEYWORD,
+  DEFAULT_PARTNER_LABEL,
+  isProgrammerStation,
+  isPartnerStation,
+  resolvePartner,
+  pickProgrammeEmployees,
+  pickPartnerEmployees,
+  pickOperatorEmployees,
+  EXTRA_STATIONS,
+  getSelectableStations,
   getRoughnessCoefficient,
   buildMonthHeaders,
   getEmployeeDisplayStations,

@@ -381,10 +381,39 @@
   flex: 1;
 }
 
+.drawing-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
 .drawing-name {
+  flex: 1;
   font-size: 24rpx;
   font-weight: 500;
   color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawing-tag {
+  flex-shrink: 0;
+  font-size: 18rpx;
+  line-height: 1.4;
+  padding: 2rpx 10rpx;
+  border-radius: 6rpx;
+  font-weight: 600;
+}
+
+.tag-pdf {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.tag-img {
+  background: #e0f2fe;
+  color: #0369a1;
 }
 
 .drawing-size {

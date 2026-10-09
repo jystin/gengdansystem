@@ -200,6 +200,13 @@
           </view>
         </view>
 
+        <!-- 统计口径切换：操作根数 / 配合根数 -->
+        <view class="prod-mode-switch">
+          <view class="prod-mode-item {{prodMode === 'operate' ? 'active' : ''}}" data-mode="operate" bindtap="onProdModeChange">操作根数</view>
+          <view class="prod-mode-item {{prodMode === 'program' ? 'active' : ''}}" data-mode="program" bindtap="onProdModeChange">配合根数</view>
+        </view>
+        <view class="prod-mode-tip">{{prodMode === 'program' ? '配合根数 = 该员工以「编程员 / 调字员」身份参与的敦压 / 拉尾子 / 精车 / 铣方头 / 打字工序根数' : '操作根数 = 该员工实际完成工序的根数'}}</view>
+
         <!-- 单员工月度表格 -->
         <scroll-view scroll-x class="prod-scroll">
           <view class="prod-table">
@@ -209,14 +216,15 @@
               <view class="prod-cell total-cell">全年</view>
             </view>
             <view class="prod-row">
-              <view class="prod-cell name-cell bold">{{productionStats[selectedProdIndex].employee.name}}</view>
-              <block wx:for="{{productionStats[selectedProdIndex].monthlyRoots}}" wx:key="key">
+              <view class="prod-cell name-cell bold">{{displayStats[selectedProdIndex].employee.name}}</view>
+              <block wx:for="{{displayStats[selectedProdIndex]._monthly}}" wx:key="key">
                 <view class="prod-cell {{item.roots > 0 ? 'has-data' : ''}}">{{item.roots}}</view>
               </block>
-              <view class="prod-cell total-cell bold">{{productionStats[selectedProdIndex].totalRoots}}</view>
+              <view class="prod-cell total-cell bold">{{displayStats[selectedProdIndex]._total}}</view>
             </view>
           </view>
         </scroll-view>
+        <view class="prod-mode-tip">本月：{{displayStats[selectedProdIndex]._current || 0}} 根</view>
 
         <!-- 全部员工汇总表 -->
         <view class="prod-all-section">
@@ -228,16 +236,16 @@
                 <view wx:for="{{monthHeaders}}" wx:key="key" class="prod-cell">{{item.label}}</view>
                 <view class="prod-cell total-cell">全年</view>
               </view>
-              <block wx:for="{{productionStats}}" wx:key="id">
+              <block wx:for="{{displayStats}}" wx:key="id">
                 <view class="prod-row">
                   <view class="prod-cell name-cell">
                     <view class="prod-emp-name">{{item.employee.name}}</view>
-                    <view class="prod-station">{{item._stationDisplay}}</view>
+                    <view class="prod-station">{{item.employee._stationDisplay}}</view>
                   </view>
-                  <block wx:for="{{item.monthlyRoots}}" wx:key="key" wx:for-item="m">
+                  <block wx:for="{{item._monthly}}" wx:key="key" wx:for-item="m">
                     <view class="prod-cell {{m.roots > 0 ? 'has-data' : ''}}">{{m.roots}}</view>
                   </block>
-                  <view class="prod-cell total-cell">{{item.totalRoots}}</view>
+                  <view class="prod-cell total-cell">{{item._total}}</view>
                 </view>
               </block>
             </view>

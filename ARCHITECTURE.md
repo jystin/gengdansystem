@@ -331,7 +331,7 @@ togglePause              → 暂停/恢复（仅管理员）
 toggleUrgent             → 加急切换（仅管理员）
 revertStep               → 撤回工序（仅管理员，含库存回退）
 updateStepKeys           → 修改工序配置（仅管理员）
-updateDrawings           → 追加图纸（仅管理员）
+updateDrawings           → 更新图纸（仅管理员；mode=append 追加 / replace 整体覆盖，删除场景用 replace）
 deleteOrder              → 删除工单（仅管理员，含库存回退+清理）
 employeeMonthlyProduction    → 单员工月度产量
 allEmployeesMonthlyProduction → 全员月度产量（单次查 1000 工单内存聚合）

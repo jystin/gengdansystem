@@ -5,24 +5,32 @@ const cloud = require('wx-server-sdk')
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 const db = cloud.database()
 
-// 工序库（与 init-db 和 mock-store 保持一致）
+// 工序库（与 init-db / orderManager / completeStep / miniprogram/utils/api.js 保持一致）
+// needPartner: 该工序需要指定配合人员（默认编程员）；
+//   partnerKeyword/partnerLabel: 配合人员的岗位关键字与称谓（如打字工序为「调字员」）
+//   repeatable+maxRepeat: 可重复多道（精车最多4道）
 const PROCESS_LIBRARY = [
   { key: 'blanking', name: '下料', station: '下料工' },
-  { key: 'pressing', name: '敦压', station: '敦压工' },
-  { key: 'programming', name: '编程', station: '编程工' },
-  { key: 'pulling_tail', name: '拉尾子', station: '拉尾工' },
-  { key: 'finish_turning', name: '精车', station: '精车工' },
-  { key: 'milling_head', name: '铣方头', station: '铣床工' },
+  { key: 'pressing', name: '敦压', station: '敦压工', needPartner: true },
+  { key: 'pulling_tail', name: '拉尾子', station: '拉尾工', needPartner: true },
+  { key: 'finish_turning', name: '精车', station: '精车工', needPartner: true, repeatable: true, maxRepeat: 4 },
+  { key: 'milling_head', name: '铣方头', station: '铣床工', needPartner: true },
   { key: 'tapping', name: '攻丝', station: '攻丝工' },
   { key: 'drilling_head', name: '打方头孔', station: '钻床工' },
   { key: 'tapping_repeat', name: '攻丝（复攻）', station: '攻丝工' },
   { key: 'threading', name: '压螺纹', station: '螺纹工' },
   { key: 'polishing', name: '压光', station: '抛光工' },
-  { key: 'marking', name: '打字', station: '打字工' },
+  { key: 'marking', name: '打字', station: '打字工', needPartner: true, partnerKeyword: '调字', partnerLabel: '调字员' },
   { key: 'heat_treatment', name: '热处理', station: '热处理工' },
   { key: 'quality_check', name: '质检', station: '质检员' },
   { key: 'warehouse', name: '入库', station: '仓管员' }
 ]
+
+// 已下线的工序：新建工单选不到，但「从已有工单创建」复制来的 stepKeys
+// 可能仍带「编程」，白名单校验与 steps 构建必须仍放行，否则复制老单会失败
+const LEGACY_PROCESSES = {
+  programming: { key: 'programming', name: '编程', station: '编程工' }
+}
 
 /**
  * 原子获取当日工单序号（并发安全）
@@ -102,8 +110,8 @@ exports.main = async (event, context) => {
     if (!stepKeys || stepKeys.length === 0) return { success: false, error: '缺少工序配置' }
     if (singleNo && String(singleNo).trim().length > 50) return { success: false, error: '单号过长' }
 
-    // 字段白名单校验：stepKeys 必须全部存在于工序库
-    const validKeys = new Set(PROCESS_LIBRARY.map(p => p.key))
+    // 字段白名单校验：stepKeys 必须全部存在于工序库（含已下线工序——「从已有工单创建」可能复制到）
+    const validKeys = new Set(PROCESS_LIBRARY.map(p => p.key).concat(Object.keys(LEGACY_PROCESSES)))
     if (!Array.isArray(stepKeys) || stepKeys.some(k => !validKeys.has(k))) {
       return { success: false, error: '工序配置包含无效工序' }
     }
@@ -159,9 +167,9 @@ exports.main = async (event, context) => {
     }
     if (!finalOrderId) finalOrderId = datePrefix + String(seq).padStart(3, '0')
 
-    // 构建工序列表
+    // 构建工序列表（在用工序 + 已下线工序都要能解析）
     const steps = stepKeys
-      .map(key => PROCESS_LIBRARY.find(p => p.key === key))
+      .map(key => PROCESS_LIBRARY.find(p => p.key === key) || LEGACY_PROCESSES[key])
       .filter(Boolean)
 
     // 构建工单数据

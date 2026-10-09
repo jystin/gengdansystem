@@ -7,25 +7,88 @@ const cloud = require('wx-server-sdk')
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 const db = cloud.database()
 
+// 工序库（与 orderManager / createOrder / init-db / miniprogram/utils/api.js 保持一致）
+//
+//   needPartner:    该工序完成后必须指定一名「配合人员」（默认是编程员）
+//   partnerKeyword: 配合人员的岗位关键字（默认「编程」）
+//   partnerLabel:   配合人员的界面称谓（默认「编程员」），如打字工序为「调字员」
+//   repeatable + maxRepeat: 可重复多道（精车最多 4 道）
 const PROCESS_LIBRARY = [
   { key: 'blanking', name: '下料', station: '下料工' },
-  { key: 'pressing', name: '敦压', station: '敦压工' },
-  { key: 'programming', name: '编程', station: '编程工' },
-  { key: 'pulling_tail', name: '拉尾子', station: '拉尾工' },
-  { key: 'finish_turning', name: '精车', station: '精车工' },
-  { key: 'milling_head', name: '铣方头', station: '铣床工' },
+  { key: 'pressing', name: '敦压', station: '敦压工', needPartner: true },
+  { key: 'pulling_tail', name: '拉尾子', station: '拉尾工', needPartner: true },
+  { key: 'finish_turning', name: '精车', station: '精车工', needPartner: true, repeatable: true, maxRepeat: 4 },
+  { key: 'milling_head', name: '铣方头', station: '铣床工', needPartner: true },
   { key: 'tapping', name: '攻丝', station: '攻丝工' },
   { key: 'drilling_head', name: '打方头孔', station: '钻床工' },
   { key: 'tapping_repeat', name: '攻丝（复攻）', station: '攻丝工' },
   { key: 'threading', name: '压螺纹', station: '螺纹工' },
   { key: 'polishing', name: '压光', station: '抛光工' },
-  { key: 'marking', name: '打字', station: '打字工' },
+  { key: 'marking', name: '打字', station: '打字工', needPartner: true, partnerKeyword: '调字', partnerLabel: '调字员' },
   { key: 'heat_treatment', name: '热处理', station: '热处理工' },
   { key: 'quality_check', name: '质检', station: '质检员' },
   { key: 'warehouse', name: '入库', station: '仓管员' }
 ]
 
-const PROCESS_MAP = Object.fromEntries(PROCESS_LIBRARY.map(p => [p.key, p]))
+// 已下线的工序：不在「可选工序」，但老工单 stepKeys 可能仍带「编程」，须能解析
+const LEGACY_PROCESSES = {
+  programming: { key: 'programming', name: '编程', station: '编程工' }
+}
+
+const PROCESS_MAP = Object.fromEntries(
+  PROCESS_LIBRARY.map(p => [p.key, p]).concat(Object.entries(LEGACY_PROCESSES))
+)
+
+const DEFAULT_PARTNER_KEYWORD = '编程'
+const DEFAULT_PARTNER_LABEL = '编程员'
+
+/** 归一化某工序的「配合人员」配置（兼容旧字段 needProgrammer） */
+function resolvePartner(step) {
+  const need = !!(step && (step.needPartner || step.needProgrammer))
+  return {
+    need,
+    keyword: (step && step.partnerKeyword) || DEFAULT_PARTNER_KEYWORD,
+    label: (step && step.partnerLabel) || DEFAULT_PARTNER_LABEL
+  }
+}
+
+/** 岗位名里是否包含指定关键字（如「编程」「调字」） */
+function hasStationKeyword(stations, keyword) {
+  return (stations || []).some(s => String(s).includes(keyword))
+}
+
+/**
+ * 把 stepKeys 展开成工序对象数组（与 orderManager.buildSteps 保持一致）
+ * 重复工序自动编号：精车 → 精车1 / 精车2 / 精车3 / 精车4
+ */
+function buildSteps(stepKeys) {
+  const keys = Array.isArray(stepKeys) ? stepKeys : []
+  const totalMap = {}
+  keys.forEach(k => { totalMap[k] = (totalMap[k] || 0) + 1 })
+
+  const seqMap = {}
+  const steps = []
+  keys.forEach((k, i) => {
+    const def = PROCESS_MAP[k]
+    if (!def) return
+    seqMap[k] = (seqMap[k] || 0) + 1
+    const total = totalMap[k]
+    const partner = resolvePartner(def)
+    steps.push({
+      ...def,
+      // 归一化「配合人员」配置（前端统一读 needProgrammer / partnerLabel / partnerKeyword）
+      needPartner: partner.need,
+      needProgrammer: partner.need,
+      partnerKeyword: partner.keyword,
+      partnerLabel: partner.label,
+      _index: i,
+      _seq: seqMap[k],
+      _repeatTotal: total,
+      name: total > 1 ? `${def.name}${seqMap[k]}` : def.name
+    })
+  })
+  return steps
+}
 
 // 获取中国时区（UTC+8）当前时间，云函数默认运行在 UTC 时区
 function getChinaNow() {
@@ -45,7 +108,7 @@ exports.main = async (event, context) => {
   const openid = wxContext.OPENID
 
   try {
-    const { orderId, operatorId, note, completedQty, materialConsumption } = event
+    const { orderId, operatorId, note, completedQty, materialConsumption, programmerId, repeatTotal } = event
 
     if (!orderId) return { success: false, error: '缺少工单ID' }
     if (!operatorId) return { success: false, error: '缺少操作员ID' }
@@ -87,8 +150,10 @@ exports.main = async (event, context) => {
       return { success: false, error: '工单已暂停，仅管理员可处理' }
     }
 
-    const steps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
-    const currentStep = steps[order.currentStepIndex]
+    const oldStepKeys = Array.isArray(order.stepKeys) ? order.stepKeys : []
+    const steps = buildSteps(oldStepKeys)
+    const curIdx = Number(order.currentStepIndex) || 0
+    const currentStep = steps[curIdx]
     if (!currentStep) {
       // 所有工序已完成或索引越界，记录完工操作并标记为已完成
       // 关键修复：使用乐观锁防止并发完成
@@ -138,8 +203,52 @@ exports.main = async (event, context) => {
         })
       } catch (e) { /* 非关键 */ }
       // 构建 steps 数组供前端使用（自动完工情况）
-      const finalSteps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
-      return { success: true, order: { ...order, steps: finalSteps, currentStepName: '已完成', currentStation: '入库完成', status: 'completed', completedDate: formatTime(), history: finalHistory } }
+      const finalSteps = buildSteps(order.stepKeys)
+      return { success: true, order: { ...order, stepKeys: oldStepKeys, steps: finalSteps, currentStepName: '已完成', currentStation: '入库完成', status: 'completed', completedDate: formatTime(), history: finalHistory } }
+    }
+
+    // ===== 配合人员校验（敦压 / 拉尾子 / 精车 / 铣方头 = 编程员；打字 = 调字员）=====
+    // 规则（严格岗位匹配，不再「放宽为任意在职员工」）：
+    //   1) 该工序带 needPartner(兼容 needProgrammer) 标记时必须传 programmerId
+    //   2) 该员工必须是「活跃」用户，且岗位必须包含本工序配置的 partnerKeyword
+    //      （默认「编程」；打字工序为「调字」）——编程员不能代替调字员，反之亦然
+    const partnerCfg = resolvePartner(currentStep)
+    let effectiveProgrammer = null
+    if (partnerCfg.need) {
+      if (!programmerId) {
+        return { success: false, error: `「${currentStep.name}」需要选择${partnerCfg.label}` }
+      }
+      let programmer = null
+      try {
+        const pRes = await db.collection('users').doc(programmerId).get()
+        programmer = pRes.data || null
+      } catch (e) {
+        return { success: false, error: `指定的${partnerCfg.label}不存在` }
+      }
+      if (!programmer || programmer.status !== 'active') {
+        return { success: false, error: `指定的${partnerCfg.label}不存在或未激活` }
+      }
+      if (!hasStationKeyword(programmer.stations, partnerCfg.keyword)) {
+        // 严格校验：岗位不含关键字一律拒绝。若系统里根本没人配该岗位，
+        // 给出「去员工管理分配岗位」的可执行提示，避免用户反复试错
+        let partnerPoolExists = false
+        try {
+          const poolRes = await db.collection('users')
+            .where({ status: 'active' })
+            .limit(500)
+            .get()
+          partnerPoolExists = (poolRes.data || [])
+            .some(u => hasStationKeyword(u.stations, partnerCfg.keyword))
+        } catch (e) { /* 查询失败按严格处理 */ partnerPoolExists = true }
+
+        return {
+          success: false,
+          error: partnerPoolExists
+            ? `「${programmer.name}」的岗位不是${partnerCfg.label}，请重新选择${partnerCfg.label}`
+            : `系统里还没有「${partnerCfg.label}」岗位的员工，请先到「员工管理」给员工分配含「${partnerCfg.keyword}」的岗位`
+        }
+      }
+      effectiveProgrammer = programmer
     }
 
     // 岗位校验：操作员（effectiveOperator）是管理员则不受岗位限制；普通员工必须岗位匹配
@@ -199,9 +308,15 @@ exports.main = async (event, context) => {
     const historyEntry = {
       stepKey: currentStep.key,
       stepName: currentStep.name,
+      stepSeq: currentStep._seq || 1,
       operatorId: effectiveOperator._id,
       operator: effectiveOperator.name,
       role: currentStep.station,
+      // 配合人员（敦压/拉尾子/精车/铣方头 = 编程员；打字 = 调字员）
+      programmerId: effectiveProgrammer ? effectiveProgrammer._id : '',
+      programmerName: effectiveProgrammer ? effectiveProgrammer.name : '',
+      partnerRole: effectiveProgrammer ? partnerCfg.label : '',
+      partnerKeyword: effectiveProgrammer ? partnerCfg.keyword : '',
       completedAt: formatTime(),
       note: note || '',
       qty: recordQty,
@@ -215,8 +330,43 @@ exports.main = async (event, context) => {
     }
 
     const newHistory = [...(order.history || []), historyEntry]
-    const newStepIndex = order.currentStepIndex + 1
-    const isCompleted = newStepIndex >= steps.length
+    const newStepIndex = curIdx + 1
+
+    // ===== 可重复工序（精车）道数调整 =====
+    // 前端传 repeatTotal = 「本工单该工序总共要几道」。按差值追加/回收「未完成」的重复工序：
+    //   例：已排 精车1/2/3，正在完成精车1，选 4 道 → 追加 1 道（精车4）
+    //       已排 精车1/2/3，正在完成精车2，改选 2 道 → 回收最后 1 道未完成的精车
+    // 只会动「未完成」的那几道（位于当前工序之后），已完成的历史记录不受影响。
+    const newStepKeys = [...oldStepKeys]
+    let repeatDelta = 0
+    if (currentStep.repeatable) {
+      const maxTotal = Number(currentStep.maxRepeat) || 4
+      const totalNow = newStepKeys.filter(k => k === currentStep.key).length
+      // 已排道数下限 = 刚完成的这道（含）→ 不会误删已完成的工序
+      const wanted = Math.max(
+        Number(repeatTotal) || currentStep._seq || 1,
+        currentStep._seq || 1
+      )
+      const target = Math.min(wanted, maxTotal)
+      repeatDelta = target - totalNow
+
+      if (repeatDelta > 0) {
+        // 追加到当前工序之后（保持精车连续挨在一起）
+        newStepKeys.splice(newStepIndex, 0, ...Array(repeatDelta).fill(currentStep.key))
+      } else if (repeatDelta < 0) {
+        // 回收最后 |repeatDelta| 道未完成的重复工序（只动 newStepIndex 之后的，不碰已完成）
+        let toRemove = -repeatDelta
+        for (let i = newStepKeys.length - 1; i >= newStepIndex && toRemove > 0; i--) {
+          if (newStepKeys[i] === currentStep.key) {
+            newStepKeys.splice(i, 1)
+            toRemove--
+          }
+        }
+      }
+    }
+
+    const finalSteps = buildSteps(newStepKeys)
+    const isCompleted = newStepIndex >= finalSteps.length
 
     // 修复：管理员在暂停状态下完成工序时，需正确处理 paused 标志
     // - 完成最后一道工序 → status='completed', paused=false（完工工单不能暂停）
@@ -232,6 +382,7 @@ exports.main = async (event, context) => {
     }).update({
       data: {
         currentStepIndex: newStepIndex,
+        stepKeys: newStepKeys,
         status: newStatus,
         paused: newPaused,
         completedDate: isCompleted ? formatTime() : null,
@@ -277,6 +428,8 @@ exports.main = async (event, context) => {
             }).update({
               data: {
                 currentStepIndex: order.currentStepIndex,
+                // 回滚时同步还原工序列表（本次可能追加/回收了重复工序）
+                stepKeys: oldStepKeys,
                 status: order.status,
                 completedDate: order.completedDate || null,
                 history: order.history || [],
@@ -316,6 +469,8 @@ exports.main = async (event, context) => {
           }).update({
             data: {
               currentStepIndex: order.currentStepIndex,
+              // 回滚时同步还原工序列表（本次可能追加/回收了重复工序）
+              stepKeys: oldStepKeys,
               status: order.status,
               completedDate: order.completedDate || null,
               history: order.history || [],
@@ -343,18 +498,23 @@ exports.main = async (event, context) => {
             submittedById: user._id,
             proxy: user._id !== effectiveOperator._id,
             note: note || '',
-            qty: recordQty
+            qty: recordQty,
+            programmerId: effectiveProgrammer ? effectiveProgrammer._id : '',
+            programmerName: effectiveProgrammer ? effectiveProgrammer.name : '',
+            partnerRole: effectiveProgrammer ? partnerCfg.label : '',
+            repeatDelta: repeatDelta || 0
           },
           createdAt: db.serverDate()
         }
       })
     } catch (e) { /* 非关键 */ }
 
-    // 构建 steps 数组供前端使用
-    const updatedSteps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
+    // 构建 steps 数组供前端使用（含重复工序编号：精车1/精车2...）
+    const updatedSteps = buildSteps(newStepKeys)
     const nextCurrentStep = updatedSteps[newStepIndex]
     const updatedOrder = {
       ...order,
+      stepKeys: newStepKeys,
       steps: updatedSteps,
       currentStepIndex: newStepIndex,
       currentStepName: nextCurrentStep ? nextCurrentStep.name : (isCompleted ? '已完成' : '无工序'),

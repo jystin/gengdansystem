@@ -55,13 +55,15 @@ Page({
         api.getMaterialLogs()
       ])
       if (!this._isPageAlive) return
+      // 吨数统一最多显示 1 位小数（四舍五入，整数不带 .0）
+      const fmt1 = (v) => Math.round(Number(v) * 10) / 10
       const fmtInv = (inventory || []).map(item => ({
         ...item,
-        stock: Math.round(item.stock * 1000) / 1000,
-        detail: (item.detail || []).map(d => ({ ...d, stock: Math.round(d.stock * 1000) / 1000 }))
+        stock: fmt1(item.stock),
+        detail: (item.detail || []).map(d => ({ ...d, stock: fmt1(d.stock) }))
       }))
-      const fmtLogs = (logs || []).map(item => ({ ...item, qty: Math.round(Number(item.qty) * 1000) / 1000, operator: api.cleanName(item.operator, '操作员') }))
-      const totalStock = Math.round(fmtInv.reduce((sum, item) => sum + item.stock, 0) * 1000) / 1000
+      const fmtLogs = (logs || []).map(item => ({ ...item, qty: fmt1(item.qty), operator: api.cleanName(item.operator, '操作员') }))
+      const totalStock = fmt1(fmtInv.reduce((sum, item) => sum + item.stock, 0))
       const materialTypes = fmtInv.length
       const lowCount = fmtInv.filter(item => item.hasLowRoughness).length
       if (!this._isPageAlive) return
@@ -215,12 +217,13 @@ Page({
     if (!this._isPageAlive || !result) return
     const inventory = result.inventory || result
     if (!Array.isArray(inventory) || inventory.length === 0) return
+    const fmt1 = (v) => Math.round(Number(v) * 10) / 10
     const fmtInv = inventory.map(item => ({
       ...item,
-      stock: Math.round(item.stock * 1000) / 1000,
-      detail: (item.detail || []).map(d => ({ ...d, stock: Math.round(d.stock * 1000) / 1000 }))
+      stock: fmt1(item.stock),
+      detail: (item.detail || []).map(d => ({ ...d, stock: fmt1(d.stock) }))
     }))
-    const totalStock = Math.round(fmtInv.reduce((sum, item) => sum + item.stock, 0) * 1000) / 1000
+    const totalStock = fmt1(fmtInv.reduce((sum, item) => sum + item.stock, 0))
     const materialTypes = fmtInv.length
     const lowCount = fmtInv.filter(item => item.hasLowRoughness).length
     this.setData({ inventory: fmtInv, totalStock, materialTypes, lowCount })

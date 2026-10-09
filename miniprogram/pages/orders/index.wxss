@@ -55,6 +55,18 @@
   margin-top: 18rpx;
 }
 
+.search-input {
+  width: 100%;
+  height: 80rpx;
+  padding: 0 24rpx;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 2rpx solid #e2e8f0;
+  border-radius: 12rpx;
+  font-size: 28rpx;
+  color: #1e293b;
+}
+
 .mini-btn {
   display: inline-flex !important;
   align-items: center;
@@ -72,8 +84,22 @@
   box-sizing: border-box;
 }
 
+/* 注意：.mini-btn 的 background 带了 !important，此处必须同样加 !important，否则选中态不生效 */
 .mini-btn.active {
-  background: #dc2626;
+  background: #dc2626 !important;
+}
+
+/* 删除入口按钮：红色描边常驻，一眼看出是可点的危险操作 */
+.mini-btn.delete-btn {
+  background: #ffffff !important;
+  color: #dc2626 !important;
+  border: 2rpx solid #dc2626;
+  box-sizing: border-box;
+}
+
+.mini-btn.delete-btn.active {
+  background: #dc2626 !important;
+  color: #ffffff !important;
 }
 
 .list {
@@ -250,6 +276,34 @@
   background: #ffffff;
   color: #0f766e;
   border: 1rpx solid #0f766e;
+}
+
+/* 危险操作按钮（安全删除选中）：实心红，确保一眼看出可点 */
+.export-btn.danger {
+  background: #dc2626;
+  color: #ffffff;
+  font-weight: 600;
+  padding: 12rpx 32rpx;
+  min-width: 200rpx;
+  text-align: center;
+  box-shadow: 0 2rpx 8rpx rgba(220, 38, 38, 0.28);
+}
+
+.export-btn.danger[disabled] {
+  background: #fca5a5;
+  color: #ffffff;
+  opacity: 1;
+  box-shadow: none;
+}
+
+/* 删除模式操作栏：改用红色调，与导出栏（绿色）区分开 */
+.export-bar.delete-bar {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.delete-bar .export-info {
+  color: #b91c1c;
 }
 
 /* 空提示 */

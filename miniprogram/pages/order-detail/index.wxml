@@ -53,11 +53,16 @@
         </view>
         <view class="field-item">
           <text class="field-label">交期</text>
-          <input class="edit-input" type="date" value="{{editFieldsDraft.dueDate}}" data-key="dueDate" bindinput="onEditFieldInput" />
+          <!-- 微信小程序不支持 input type=date，必须用 picker mode=date 才能唤起原生日历（与创建页一致） -->
+          <picker mode="date" value="{{editFieldsDraft.dueDate}}" data-key="dueDate" bindchange="onEditFieldDate">
+            <view class="edit-input {{editFieldsDraft.dueDate ? '' : 'placeholder'}}">{{editFieldsDraft.dueDate || '请选择日期'}}</view>
+          </picker>
         </view>
         <view class="field-item">
           <text class="field-label">下单日期</text>
-          <input class="edit-input" type="date" value="{{editFieldsDraft.orderDate}}" data-key="orderDate" bindinput="onEditFieldInput" />
+          <picker mode="date" value="{{editFieldsDraft.orderDate}}" data-key="orderDate" bindchange="onEditFieldDate">
+            <view class="edit-input {{editFieldsDraft.orderDate ? '' : 'placeholder'}}">{{editFieldsDraft.orderDate || '请选择日期'}}</view>
+          </picker>
         </view>
         <view class="field-item">
           <text class="field-label">备注</text>
@@ -125,11 +130,14 @@
           <view class="step-dot"></view>
           <view class="step-body">
             <view class="row">
-              <text class="step-name">{{item.name}}</text>
+              <view class="step-name-wrap">
+                <text class="step-name">{{item.name}}</text>
+                <text wx:if="{{item.needProgrammer}}" class="step-tag">需{{item.partnerLabel || '编程员'}}</text>
+              </view>
               <text class="subtle">{{item.station}}</text>
-              <button wx:if="{{isAdmin && index < order.currentStepIndex}}" class="step-revert-btn" bindtap="revertStep" data-step-key="{{item.key}}">撤回</button>
+              <button wx:if="{{isAdmin && index < order.currentStepIndex}}" class="step-revert-btn" bindtap="revertStep" data-step-key="{{item.key}}" data-step-index="{{index}}">撤回</button>
             </view>
-            <view class="subtle" wx:if="{{index < order.history.length}}">{{order.history[index].operator}} - {{order.history[index].completedAt}}{{order.history[index].qty ? ' - ' + order.history[index].qty + '根' : ''}}</view>
+            <view class="subtle" wx:if="{{index < order.history.length}}">{{order.history[index].operator}} - {{order.history[index].completedAt}}{{order.history[index].qty ? ' - ' + order.history[index].qty + '根' : ''}}{{order.history[index].programmerName ? ' - ' + (order.history[index].partnerRole || '编程员') + ' ' + order.history[index].programmerName : ''}}</view>
             <view class="subtle" wx:else>等待处理</view>
           </view>
         </view>
@@ -139,27 +147,45 @@
 
   <view class="section card">
     <view class="section-title-row">
-      <text class="section-title">图纸附件（{{drawingCount}}张）</text>
-      <button wx:if="{{isAdmin}}" class="upload-btn small" bindtap="chooseDrawing">上传图纸</button>
+      <text class="section-title">图纸附件（{{drawingCount}}份）</text>
+      <button wx:if="{{isAdmin}}" class="upload-btn small" bindtap="chooseDrawing">{{isDesktopPlatform ? '上传图纸（支持 PDF）' : '上传图纸'}}</button>
     </view>
 
     <view class="drawing-grid" wx:if="{{hasDrawings}}">
-      <block wx:for="{{drawingUrls}}" wx:key="*this">
-        <view class="drawing-thumb drawing-uploaded">
+      <!-- 已上传图纸：图片显示缩略图，PDF 显示文件卡片 -->
+      <block wx:for="{{drawingUrls}}" wx:key="key">
+        <view class="drawing-thumb drawing-uploaded {{item.isPDF ? 'drawing-file-card' : ''}}">
           <image
+            wx:if="{{!item.isPDF}}"
             class="drawing-thumb-img"
-            src="{{item}}"
+            src="{{item.url}}"
             mode="aspectFill"
-            data-urls="{{drawingUrls}}"
+            show-menu-by-longpress="{{true}}"
             data-index="{{index}}"
             bindtap="previewDrawing"
           />
-          <view wx:if="{{isAdmin}}" class="drawing-delete" data-index="{{index}}" bindtap="deleteUploadedDrawing">×</view>
+          <view wx:else class="drawing-file" data-index="{{index}}" bindtap="previewDrawing">
+            <text class="drawing-file-icon">PDF</text>
+            <text class="drawing-file-name">{{item.name || '图纸文件'}}</text>
+          </view>
+          <view wx:if="{{isAdmin}}" class="drawing-delete" data-index="{{index}}" data-file-id="{{item.fileID}}" bindtap="deleteUploadedDrawing">×</view>
         </view>
       </block>
-      <block wx:for="{{pendingDrawings}}" wx:key="name">
-        <view class="drawing-thumb drawing-pending">
-          <image class="drawing-thumb-img" src="{{item.tempFilePath}}" mode="aspectFill" />
+      <!-- 待上传图纸 -->
+      <block wx:for="{{pendingDrawings}}" wx:key="key">
+        <view class="drawing-thumb drawing-pending {{item.isPDF ? 'drawing-file-card' : ''}}">
+          <image
+            wx:if="{{!item.isPDF}}"
+            class="drawing-thumb-img"
+            src="{{item.tempFilePath}}"
+            mode="aspectFill"
+            data-index="{{index}}"
+            bindtap="previewPendingDrawing"
+          />
+          <view wx:else class="drawing-file" data-index="{{index}}" bindtap="previewPendingDrawing">
+            <text class="drawing-file-icon">PDF</text>
+            <text class="drawing-file-name">{{item.name || '图纸文件'}}</text>
+          </view>
           <text class="drawing-pending-tag">待上传</text>
           <view class="drawing-delete" data-index="{{index}}" bindtap="removePendingDrawing">×</view>
         </view>
@@ -206,17 +232,42 @@
   <view class="section card">
     <view class="section-title">订单二维码</view>
     <view class="subtle">二维码内容绑定工单号：{{order.qrContent || order.id}}</view>
+    <view class="qr-tip {{isDevtools ? 'qr-tip-warn' : ''}}">
+      <block wx:if="{{isDevtools}}">开发者工具无法模拟「另存为」对话框（官方限制，非小程序代码问题）。请用<text class="qr-tip-strong">电脑版微信</text>打开本小程序验证。当前环境点「另存为…」会改为复制图片链接，贴到浏览器即可下载。</block>
+      <block wx:elif="{{isDesktop}}">点「另存为…」可自选保存目录；也可点图片进入全屏预览后<text class="qr-tip-strong">右键</text>选择「图片另存为」。</block>
+      <block wx:else>长按二维码图片可保存到相册或识别；也可点下方按钮保存。</block>
+    </view>
 
     <!-- 主码：微信小程序码（太阳码） -->
     <view wx:if="{{order.qrCodeFileID}}" class="qr-wrap">
       <view class="qr-label">微信小程序码（员工用微信扫码直接进入）</view>
-      <image class="qr-image" src="{{order.qrUrl}}" mode="widthFix" />
+      <image
+        class="qr-image"
+        src="{{order.qrUrl}}"
+        mode="widthFix"
+        show-menu-by-longpress="{{true}}"
+        data-kind="wxacode"
+        bindtap="previewQrCode"
+      />
+      <view class="qr-tools">
+        <view class="qr-tool qr-tool-primary" data-kind="wxacode" bindtap="saveQrCode">{{isDesktop ? '另存为…' : '保存到相册'}}</view>
+      </view>
     </view>
 
     <!-- 备用码：文本二维码（小程序内扫码用） -->
     <view class="qr-wrap qr-text-wrap">
       <view class="qr-label qr-label-text">备用文本二维码（小程序内扫码或手动输入工单号）</view>
-      <image class="qr-image qr-image-text" src="{{order.textQrUrl}}" mode="widthFix" />
+      <image
+        class="qr-image qr-image-text"
+        src="{{order.textQrUrl}}"
+        mode="widthFix"
+        show-menu-by-longpress="{{true}}"
+        data-kind="text"
+        bindtap="previewQrCode"
+      />
+      <view class="qr-tools">
+        <view class="qr-tool qr-tool-primary" data-kind="text" bindtap="saveQrCode">{{isDesktop ? '另存为…' : '保存到相册'}}</view>
+      </view>
     </view>
 
     <view class="subtle qr-note">
@@ -236,11 +287,33 @@
     <view wx:if="{{canComplete}}">
       <!-- 操作员选择（所有工序都需要） -->
       <view class="form-field">
-        <view class="form-label">工序操作员<text class="required-star">*</text></view>
-        <view class="operator-select" bindtap="showOperatorPicker">
+        <view class="form-label">工序操作员<text class="required-star">*</text><text class="form-label-tip">仅限{{currentStepStation || '对应岗位'}}或管理员</text></view>
+        <view class="operator-select" bindtap="showEmployeePicker" data-target="operator">
           <text class="{{operatorId ? '' : 'placeholder'}}">{{operatorLabel}}</text>
           <text class="select-arrow">▾</text>
         </view>
+      </view>
+
+      <!-- 配合人员选择（敦压 / 拉尾子 / 精车 / 铣方头 = 编程员；打字 = 调字员） -->
+      <view wx:if="{{isProgrammerStep}}" class="form-field">
+        <view class="form-label">{{partnerLabel}}<text class="required-star">*</text><text class="form-label-tip">本工序需要{{partnerLabel}}配合</text></view>
+        <view class="operator-select" bindtap="showEmployeePicker" data-target="programmer">
+          <text class="{{programmerId ? '' : 'placeholder'}}">{{programmerId ? programmerLabel : '请选择' + partnerLabel}}</text>
+          <text class="select-arrow">▾</text>
+        </view>
+        <view wx:if="{{programmerFallback}}" class="form-hint warm">系统里还没有{{partnerLabel}}，请到「员工管理」给对应员工分配含「{{partnerKeyword}}」的岗位后再回来填写。</view>
+      </view>
+
+      <!-- 可重复工序（精车1~4）：本工单共需几道 -->
+      <view wx:if="{{isRepeatableStep}}" class="form-field">
+        <view class="form-label">本工单共需几道精车<text class="form-label-tip">做完当前这道会自动排上后面几道</text></view>
+        <view class="repeat-options">
+          <view wx:for="{{repeatOptions}}" wx:key="value"
+                class="repeat-option {{repeatTotalChoice === item.value ? 'active' : ''}}"
+                data-value="{{item.value}}"
+                bindtap="onRepeatTotalChange">{{item.label}}</view>
+        </view>
+        <view class="form-hint">不确定就先按默认，后面每做完一道都还能再加（最多 4 道）。</view>
       </view>
 
       <!-- 下料工序：需要填写材料消耗 -->
@@ -250,8 +323,9 @@
         <view class="form-field">
           <view class="form-label">材料类型<text class="required-star">*</text></view>
           <picker mode="selector" range="{{materialTypes}}" bindchange="bindMaterialType">
-            <view class="input picker-input {{materialConsumption.material ? '' : 'placeholder'}}">
-              {{materialConsumption.material || '请选择材料'}}
+            <view class="form-picker">
+              <text class="{{materialConsumption.material ? '' : 'placeholder'}}">{{materialConsumption.material || '请选择材料'}}</text>
+              <text class="select-arrow">▾</text>
             </view>
           </picker>
         </view>
@@ -316,7 +390,7 @@
           <text class="history-name">{{item.stepName}}</text>
           <text class="subtle">{{item.completedAt}}</text>
         </view>
-        <view class="subtle">{{item.operator}} · {{item.role}}{{item.qty ? ' · 实际 ' + item.qty + ' 根' : ''}}{{item.note ? ' · ' + item.note : ''}}</view>
+        <view class="subtle">{{item.operator}} · {{item.role}}{{item.qty ? ' · 实际 ' + item.qty + ' 根' : ''}}{{item.programmerName ? ' · ' + (item.partnerRole || '编程员') + ' ' + item.programmerName : ''}}{{item.note ? ' · ' + item.note : ''}}</view>
       </view>
     </block>
   </view>
@@ -329,32 +403,37 @@
   </view>
 </view>
 
-<!-- 操作员选择弹窗 -->
-<view wx:if="{{showOperatorPicker}}" class="op-picker-mask" bindtap="hideOperatorPicker">
-  <view class="op-picker-panel" catchtap="onOperatorPanelTap">
+<!-- 员工选择弹窗（操作员 / 配合人员 共用，按 pickerTarget 切换数据源） -->
+<view wx:if="{{pickerTarget}}" class="op-picker-mask" bindtap="hideEmployeePicker">
+  <view class="op-picker-panel" catchtap="onPickerPanelTap">
     <view class="op-picker-header">
-      <text class="op-picker-title">选择操作员</text>
-      <text class="op-picker-close" bindtap="hideOperatorPicker">✕</text>
+      <text class="op-picker-title">{{pickerTarget === 'programmer' ? '选择' + partnerLabel : '选择操作员'}}</text>
+      <text class="op-picker-close" bindtap="hideEmployeePicker">✕</text>
     </view>
-    <input class="op-search-input" placeholder="搜索姓名或岗位..." value="{{operatorSearchKeyword}}" bindinput="onOperatorSearchInput" confirm-type="search" focus />
+    <input class="op-search-input"
+           placeholder="{{pickerTarget === 'programmer' ? '搜索' + partnerLabel + '姓名或岗位...' : '搜索姓名或岗位...'}}"
+           value="{{pickerKeyword}}"
+           bindinput="onPickerSearchInput"
+           confirm-type="search"
+           focus />
     <scroll-view scroll-y class="op-employee-list">
-      <block wx:for="{{activeEmployees}}" wx:key="id">
-        <view wx:if="{{!operatorSearchKeyword || item.name.indexOf(operatorSearchKeyword) !== -1 || (item._stationDisplay && item._stationDisplay.indexOf(operatorSearchKeyword) !== -1)}}"
-              class="op-employee-item {{operatorId === item.id ? 'selected' : ''}}"
+      <block wx:for="{{pickerList}}" wx:key="id">
+        <view wx:if="{{!pickerKeyword || item.name.indexOf(pickerKeyword) !== -1 || (item._stationDisplay && item._stationDisplay.indexOf(pickerKeyword) !== -1)}}"
+              class="op-employee-item {{pickerTarget === 'programmer' ? (programmerId === item.id ? 'selected' : '') : (operatorId === item.id ? 'selected' : '')}}"
               data-id="{{item.id}}"
-              bindtap="selectOperator">
+              bindtap="selectEmployee">
           <view class="op-emp-name">{{item.name}}</view>
           <view class="op-emp-station">{{item._stationDisplay}}</view>
-          <text wx:if="{{operatorId === item.id}}" class="op-check-icon">✓</text>
+          <text wx:if="{{pickerTarget === 'programmer' ? programmerId === item.id : operatorId === item.id}}" class="op-check-icon">✓</text>
         </view>
       </block>
-      <view wx:if="{{activeEmployees.length === 0}}" class="op-empty">暂无可选员工</view>
+      <view wx:if="{{pickerList.length === 0}}" class="op-empty">{{pickerTarget === 'programmer' ? '暂无' + partnerLabel + '，请先在员工管理中给员工配置含「' + partnerKeyword + '」的岗位' : '当前工序仅限' + (currentStepStation || '对应岗位') + '或管理员操作，暂无可选人员，请到员工管理配置岗位'}}</view>
     </scroll-view>
   </view>
+</view>
 
-  <!-- 编辑工单字段保存/取消按钮(仅编辑模式) -->
-  <view wx:if="{{editingFields}}" class="edit-actions">
-    <button class="secondary-btn" bindtap="cancelEditFields" disabled="{{editBtnLoading}}">取消</button>
-    <button class="primary-btn" bindtap="saveEditFields" loading="{{editBtnLoading}}" disabled="{{editBtnLoading}}">保存修改</button>
-  </view>
+<!-- 编辑工单字段保存/取消按钮(仅编辑模式) -->
+<view wx:if="{{editingFields}}" class="edit-actions">
+  <button class="secondary-btn" bindtap="cancelEditFields" disabled="{{editBtnLoading}}">取消</button>
+  <button class="primary-btn" bindtap="saveEditFields" loading="{{editBtnLoading}}" disabled="{{editBtnLoading}}">保存修改</button>
 </view>

@@ -29,7 +29,9 @@ Page({
     monthHeaders: [],
     selectedProdIndex: 0,
     prodYear: '',
-    prodEmployeeNames: []
+    prodEmployeeNames: [],
+    prodMode: 'operate',      // 统计口径：operate=操作根数，program=配合根数（编程员/调字员）
+    displayStats: []          // 按当前口径整理后的展示数据
   },
 
   onLoad() { this._isPageAlive = true },
@@ -114,12 +116,11 @@ Page({
     }
     try {
       ui.showLoading('加载员工数据...')
-      // 【优化】getProcessLibrary() 是同步调用，直接从常量取无需 Promise 包装
-      const processLib = api.getProcessLibrary()
       const employees = await api.listEmployees()
-      const stationMap = {}
-      processLib.forEach(p => { stationMap[p.station] = p.name })
-      const allStations = Object.keys(stationMap).filter(s => s !== '管理员中心').map(s => ({ station: s, name: stationMap[s], checked: false }))
+      // 可分配岗位 = 工序岗位 + 非工序岗位（如「调字员」），保证调字员可被分配
+      const allStations = api.getSelectableStations()
+        .filter(s => s.station !== '管理员中心')
+        .map(s => ({ station: s.station, name: s.name, checked: false }))
 
       const currentUser = getApp().globalData.currentUser || {}
       const empList = (employees || []).map(emp => {
@@ -156,6 +157,7 @@ Page({
         prodYear: year,
         prodEmployeeNames: stats.map(s => `${s.employee.name} · ${api.getEmployeeDisplayStations(s.employee)}`)
       })
+      this._applyProdMode()
     } catch (e) {
       ui.handleError(e, '加载员工数据失败')
     } finally {
@@ -202,6 +204,7 @@ Page({
         prodEmployeeNames: stats.map(s => `${s.employee.name} · ${api.getEmployeeDisplayStations(s.employee)}`),
         editingEmpId: ''
       })
+      this._applyProdMode()
     } catch (e) {
       console.warn('[home] 刷新员工弹窗数据失败:', e)
     }
@@ -370,6 +373,31 @@ Page({
     this.setData({ selectedProdIndex: Number(e.detail.value) })
   },
 
+  /** 统计口径切换：operate=操作根数（默认） / program=配合根数 */
+  onProdModeChange(e) {
+    const mode = (e.currentTarget.dataset.mode === 'program') ? 'program' : 'operate'
+    if (mode === this.data.prodMode) return
+    this.setData({ prodMode: mode, selectedProdIndex: 0 })
+    this._applyProdMode()
+  },
+
+  /**
+   * 按当前口径把 productionStats 整理成展示数据
+   * 配合根数来自后端 programmerMonthlyRoots
+   * （敦压/拉尾子/精车/铣方头的编程员 + 打字的调字员）
+   */
+  _applyProdMode() {
+    const mode = this.data.prodMode
+    const isProg = mode === 'program'
+    const list = (this.data.productionStats || []).map(s => ({
+      ...s,
+      _monthly: (isProg ? s.programmerMonthlyRoots : s.monthlyRoots) || s.monthlyRoots || [],
+      _total: isProg ? (s.programmerTotalRoots || 0) : (s.totalRoots || 0),
+      _current: isProg ? (s.programmerCurrentMonthRoots || 0) : (s.currentMonthRoots || 0)
+    }))
+    this.setData({ displayStats: list })
+  },
+
   async exportAllProduction() {
     try {
       ui.showLoading('正在生成报表...')
@@ -379,8 +407,8 @@ Page({
         ui.toast('暂无数据')
         return
       }
-      const content = _getExportExcel().generateProductionDetailHtml(rows, null, this.data.prodYear)
-      this._doExportFile(content, `员工月度报表_全部_${this.data.prodYear}`)
+      const doc = _getExportExcel().buildProductionDoc(rows, null, this.data.prodYear, this.data.prodMode)
+      await this._doExportDoc(doc)
     } catch (e) {
       ui.handleError(e, '导出失败')
     } finally {
@@ -389,7 +417,7 @@ Page({
   },
 
   async exportOneProduction() {
-    const { productionStats, selectedProdIndex, prodYear } = this.data
+    const { productionStats, selectedProdIndex, prodYear, prodMode } = this.data
     const emp = productionStats[selectedProdIndex]
     if (!emp) return
     try {
@@ -397,14 +425,18 @@ Page({
       const allRows = await api.getProductionRows()
       const empId = emp.employee.id
       const empName = emp.employee.name
-      const rows = allRows.filter(r => r.employeeId === empId || r.employeeName === empName)
+      // 配合口径下：同时导出「他作为配合人员（编程员/调字员）参与」的记录
+      const rows = allRows.filter(r =>
+        r.employeeId === empId || r.employeeName === empName ||
+        (prodMode === 'program' && (r.programmerId === empId || r.programmerName === empName))
+      )
       if (rows.length === 0) {
         ui.hideLoading()
         ui.toast('该员工暂无记录')
         return
       }
-      const content = _getExportExcel().generateProductionDetailHtml(rows, emp, prodYear)
-      this._doExportFile(content, `员工月度报表_${empName}_${prodYear}`)
+      const doc = _getExportExcel().buildProductionDoc(rows, emp, prodYear, prodMode)
+      await this._doExportDoc(doc)
     } catch (e) {
       ui.handleError(e, '导出失败')
     } finally {
@@ -412,38 +444,24 @@ Page({
     }
   },
 
-  _doExportFile(content, fileName) {
-    const fs = wx.getFileSystemManager()
-    const fullFileName = fileName + '_' + this._formatNow() + '.xls'
-    const tempFilePath = `${wx.env.USER_DATA_PATH}/${fullFileName}`
-
-    fs.writeFile({
-      filePath: tempFilePath,
-      data: content,
-      encoding: 'utf8',
-      success: () => {
-        ui.showLoading('正在打开...')
-        wx.openDocument({
-          filePath: tempFilePath,
-          fileType: 'xls',
-          showMenu: true,
-          success: () => { ui.hideLoading() },
-          fail: () => {
-            ui.hideLoading()
-            ui.toast('文件已生成', 'none', 2000)
-          }
-        })
-      },
-      fail: () => {
-        ui.hideLoading()
-        ui.toast('写入失败')
+  /**
+   * 导出报表（平台自适应，由 utils/export-excel 统一处理）
+   *   电脑端（微信 Windows/Mac）→ 生成真 .xlsx，弹系统「另存为」对话框，双击即可用 Excel 打开
+   *   手机端 → 生成真 .xlsx 用微信文档预览器打开（失败自动回退 HTML 表格）
+   *   开发者工具 → 不支持另存为，给出明确提示
+   */
+  async _doExportDoc(doc) {
+    try {
+      const res = await _getExportExcel().exportDoc(doc)
+      if (res.mode === 'disk') {
+        ui.toast('已保存到所选目录，双击即可打开', 'success', 2500)
       }
-    })
-  },
-
-  _formatNow() {
-    const d = new Date()
-    const p = n => String(n).padStart(2, '0')
-    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`
+    } catch (e) {
+      if (e && e.code === 'DEVTOOLS_UNSUPPORTED') {
+        ui.toast('开发者工具不支持「另存为」，请在电脑版微信中导出', 'none', 3500)
+        return
+      }
+      throw e
+    }
   }
 })

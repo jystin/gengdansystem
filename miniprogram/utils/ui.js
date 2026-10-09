@@ -41,13 +41,35 @@ function modal(options) {
 }
 
 async function confirm(content, title = '确认操作', options = {}) {
-  const res = await modal({
-    title,
-    content,
-    showCancel: true,
-    ...options
+  // 【环境兼容】部分环境（开发者工具 / 部分真机）会吞掉 wx.showModal 的回调，
+  // 导致 Promise 永久挂起 —— 表现为「按钮点了没反应」。
+  // 因此支持超时兜底：modalTimeout 内没有任何回调 → 视为弹窗不可用，
+  // 按 fallbackOnTimeout 返回（默认 false = 什么都不做，保持原行为）。
+  const { modalTimeout = 0, fallbackOnTimeout = false, ...rest } = options
+
+  return new Promise((resolve) => {
+    let settled = false
+    let timer = null
+    if (modalTimeout > 0) {
+      timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        console.warn('[ui.confirm] 弹窗无响应（可能被当前环境吞掉），按 fallbackOnTimeout =', fallbackOnTimeout, '处理')
+        resolve(!!fallbackOnTimeout)
+      }, modalTimeout)
+    }
+    modal({
+      title,
+      content,
+      showCancel: true,
+      ...rest
+    }).then((res) => {
+      if (timer) clearTimeout(timer)
+      if (settled) return
+      settled = true
+      resolve(!!res.confirm)
+    })
   })
-  return res.confirm
 }
 
 // 节流（固定时间窗口内只执行首次）

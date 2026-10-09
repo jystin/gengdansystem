@@ -80,6 +80,29 @@
     </view>
   </view>
 
+  <!-- 配合根数（作为编程员/调字员参与 敦压/拉尾子/精车/铣方头/打字 的量） -->
+  <view wx:if="{{monthlyStats.programmerTotalRoots > 0}}" class="section card">
+    <view class="section-title">{{monthlyStats.year}} 配合根数</view>
+    <view class="monthly-summary card-mini">
+      <view class="row">
+        <view>
+          <view class="mini-title">本年配合</view>
+          <view class="subtle">当前月：{{monthlyStats.programmerCurrentMonthRoots || 0}} 根</view>
+        </view>
+        <text class="mini-total">{{monthlyStats.programmerTotalRoots || 0}} 根</text>
+      </view>
+    </view>
+    <view class="month-grid">
+      <block wx:for="{{monthlyStats.programmerMonthlyRoots}}" wx:key="key">
+        <view class="month-card">
+          <text class="month-label">{{item.label}}</text>
+          <text class="month-value">{{item.roots}} 根</text>
+        </view>
+      </block>
+    </view>
+    <view class="subtle">统计口径：作为编程员 / 调字员参与的敦压 / 拉尾子 / 精车 / 铣方头 / 打字工序根数</view>
+  </view>
+
   <view class="section card">
     <view class="section-title">岗位绑定员工（{{employees.length}}人）</view>
     <block wx:for="{{employees}}" wx:key="id">

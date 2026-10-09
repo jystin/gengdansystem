@@ -29,7 +29,7 @@
     <view wx:if="{{isAdmin && deleteMode}}" class="export-bar delete-bar">
       <view class="export-info">已选 {{selectedCount}} 项（仅可勾选已完成或未开始的工单）</view>
       <view class="export-btns">
-        <button class="export-btn danger" bindtap="confirmSafeDelete">安全删除选中</button>
+        <button class="export-btn danger" bindtap="confirmSafeDelete" disabled="{{selectedCount === 0}}">安全删除选中{{selectedCount > 0 ? '（' + selectedCount + '）' : ''}}</button>
       </view>
     </view>
 

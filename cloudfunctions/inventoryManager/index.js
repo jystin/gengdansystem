@@ -10,9 +10,10 @@ const MATERIAL_TYPES = [
   '不锈钢420', '不锈钢304', '不锈钢316', '不锈钢431', '铜', '双相钢'
 ]
 
-const MATERIAL_LOW_THRESHOLDS = {
-  '不锈钢420': 10, '不锈钢304': 3, '不锈钢316': 3, '不锈钢431': 5
-}
+// 粗度明细的「不足」预警阈值（吨）：单粗度库存小于该值才标记
+// （2026-10-09 调整：原来沿用材料级阈值如 420→10吨，导致 φ20 1吨 也被标不足；
+//   现按用户要求统一为 <1 吨才算不足）
+const ROUGHNESS_LOW_THRESHOLD = 1
 
 function formatTime() {
   const now = new Date()
@@ -59,11 +60,10 @@ async function getInventory() {
 
     return types.map(name => {
       const roughnessMap = invMap[name] || {}
-      const threshold = MATERIAL_LOW_THRESHOLDS[name] || 0
       const entries = Object.entries(roughnessMap)
       const totalStock = entries.reduce((s, [, v]) => s + Number(v), 0)
       const detail = entries
-        .map(([r, stock]) => ({ roughness: String(r), stock: Number(stock), isLow: Number(stock) < threshold }))
+        .map(([r, stock]) => ({ roughness: String(r), stock: Number(stock), isLow: Number(stock) < ROUGHNESS_LOW_THRESHOLD }))
         .sort((a, b) => Number(a.roughness) - Number(b.roughness))
       const hasLowRoughness = detail.some(d => d.isLow)
       return { name, stock: totalStock, detail, hasLowRoughness }

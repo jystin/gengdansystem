@@ -149,19 +149,19 @@ exports.main = async (event, context) => {
     }
 
     // 第一步：初始化工序库
+    // needPartner 标记「完成后必须指定配合人员」（默认编程员，打字工序为调字员）
     const processes = [
       { key: 'blanking', name: '下料', station: '下料工' },
-      { key: 'pressing', name: '敦压', station: '敦压工' },
-      { key: 'programming', name: '编程', station: '编程工' },
-      { key: 'pulling_tail', name: '拉尾子', station: '拉尾工' },
-      { key: 'finish_turning', name: '精车', station: '精车工' },
-      { key: 'milling_head', name: '铣方头', station: '铣床工' },
+      { key: 'pressing', name: '敦压', station: '敦压工', needPartner: true },
+      { key: 'pulling_tail', name: '拉尾子', station: '拉尾工', needPartner: true },
+      { key: 'finish_turning', name: '精车', station: '精车工', needPartner: true, repeatable: true, maxRepeat: 4 },
+      { key: 'milling_head', name: '铣方头', station: '铣床工', needPartner: true },
       { key: 'tapping', name: '攻丝', station: '攻丝工' },
       { key: 'drilling_head', name: '打方头孔', station: '钻床工' },
       { key: 'tapping_repeat', name: '攻丝（复攻）', station: '攻丝工' },
       { key: 'threading', name: '压螺纹', station: '螺纹工' },
       { key: 'polishing', name: '压光', station: '抛光工' },
-      { key: 'marking', name: '打字', station: '打字工' },
+      { key: 'marking', name: '打字', station: '打字工', needPartner: true, partnerKeyword: '调字', partnerLabel: '调字员' },
       { key: 'heat_treatment', name: '热处理', station: '热处理工' },
       { key: 'quality_check', name: '质检', station: '质检员' },
       { key: 'warehouse', name: '入库', station: '仓管员' }

@@ -1,6 +1,7 @@
 const api = require('../../utils/api')
 const ui = require('../../utils/ui')
 const storage = require('../../utils/cloud-storage')
+const drawing = require('../../utils/drawing')
 
 function emptyForm() {
   return {
@@ -31,6 +32,7 @@ Page({
   data: {
     currentUser: { role: '', status: 'active' },
     isAdmin: false,
+    isDesktopPlatform: false,
     form: emptyForm(),
     createdOrderId: '',
     processList: [],
@@ -78,6 +80,7 @@ Page({
       this.setData({
         currentUser,
         isAdmin,
+        isDesktopPlatform: drawing.isDesktop(),
         processList,
         copyOrders: orders || [],
         templates: enrichedTemplates,
@@ -105,40 +108,23 @@ Page({
       const privacyOk = await app.requirePrivacyAuthorize()
       if (!privacyOk) return
 
-      const chooseResult = await new Promise((resolve) => {
-        wx.chooseMedia({
-          count: 9,
-          mediaType: ['image'],
-          sourceType: ['album', 'camera'],
-          success: (res) => resolve(res),
-          fail: () => resolve(null)
-        })
-      })
+      // 移动端：拍照/相册；电脑端：本地文件（支持 PDF）
+      const picked = await drawing.chooseDrawings(9)
+      if (!picked.length) return
 
-      if (!chooseResult) return
-
-      const tempFiles = chooseResult.tempFiles || []
-      if (tempFiles.length === 0) return
-
-      const drawings = (this.data.form.drawings || []).concat(
-        tempFiles.map((file, index) => {
-          // 保留原文件扩展名，便于后续预览和下载
-          const originalName = (file.tempFilePath || '').split('.').pop() || ''
-          const ext = originalName.match(/^(jpg|jpeg|png|gif|webp|bmp|pdf)$/i) ? originalName.toLowerCase() : 'jpg'
-          return {
-            name: `drawing_${Date.now()}_${index}.${ext}`,
-            tempFilePath: file.tempFilePath,
-            type: file.type || 'image',
-            size: file.size || 0
-          }
-        })
-      )
+      const drawings = (this.data.form.drawings || []).concat(picked)
       this.setData({ form: { ...this.data.form, drawings } })
     } catch (e) {
       ui.handleError(e, '上传图纸失败')
     } finally {
       this._choosingLock = false
     }
+  },
+
+  /** 预览已选图纸（图片左右滑动 / PDF 用系统打开） */
+  previewDrawing(event) {
+    const index = Number(event.currentTarget.dataset.index)
+    drawing.openDrawing(this.data.form.drawings || [], index)
   },
 
   removeDrawing(event) {
@@ -198,15 +184,29 @@ Page({
     })
   },
 
+  /** 可重复工序（精车）自动编号：精车1 / 精车2 / 精车3 */
+  _renumberSteps(list) {
+    const arr = Array.isArray(list) ? list : []
+    const total = {}
+    arr.forEach(s => { total[s.key] = (total[s.key] || 0) + 1 })
+    const seq = {}
+    return arr.map(s => {
+      seq[s.key] = (seq[s.key] || 0) + 1
+      const base = (api.getProcessByKey(s.key) || {}).name || s.name
+      return { ...s, name: total[s.key] > 1 ? `${base}${seq[s.key]}` : base }
+    })
+  },
+
   addStep(event) {
     const stepKey = event.currentTarget.dataset.key
     const step = this.data.processList.find((p) => p.key === stepKey)
     if (!step) return
     const form = this.data.form
-    const newSelectedSteps = [...this.data.selectedSteps, {
+    // 可重复工序（精车）插到同名前一道之后，保持连续；其它工序追加到末尾
+    const newSelectedSteps = this._renumberSteps(api.insertStepSmart(this.data.selectedSteps, {
       ...step,
       instanceId: `${stepKey}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    }]
+    }))
     this.setData({
       selectedSteps: newSelectedSteps,
       form: { ...form, selectedStepKeys: newSelectedSteps.map((s) => s.key) }
@@ -222,7 +222,7 @@ Page({
       return
     }
     const form = this.data.form
-    const newSelectedSteps = this.data.selectedSteps.filter((s) => s.instanceId !== instanceId)
+    const newSelectedSteps = this._renumberSteps(this.data.selectedSteps.filter((s) => s.instanceId !== instanceId))
     this.setData({
       selectedSteps: newSelectedSteps,
       form: { ...form, selectedStepKeys: newSelectedSteps.map((s) => s.key) }
@@ -273,10 +273,15 @@ Page({
       for (let i = 0; i < filesToUpload.length; i += CONCURRENCY) {
         const batch = filesToUpload.slice(i, i + CONCURRENCY)
         const results = await Promise.allSettled(batch.map(async (d) => {
-          const ext = (d.tempFilePath.match(/\.(\w+)$/) || [])[1] || 'jpg'
+          const ext = d.ext || drawing.extOf(d.name) || drawing.extOf(d.tempFilePath) || 'jpg'
           const cloudPath = `drawings/${form.singleNo || 'order'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
           const up = await storage.uploadFile(cloudPath, d.tempFilePath)
-          return { name: d.name, fileID: up.fileID, cloudPath: up.fileID, type: d.type || 'image' }
+          return {
+            name: d.name,
+            fileID: up.fileID,
+            cloudPath: up.fileID,
+            type: d.isPDF ? 'pdf' : (d.type || 'image')
+          }
         }))
         for (const result of results) {
           if (result.status === 'fulfilled') {
@@ -306,23 +311,14 @@ Page({
       this.setData({ form: emptyForm(), createdOrderId: order.id || '' })
       ui.hideLoading()
       ui.toast('工单创建成功', 'success')
-      // 二维码降级提示（WX_APP_SECRET 未配置等场景），看完再进详情
-      const goDetail = () => {
-        if (order.id) {
-          wx.navigateTo({ url: `/pages/order-detail/index?id=${order.id}` })
-        }
-      }
+      // 二维码降级提示（WX_APP_SECRET 未配置等场景）
+      // 注意：不能把跳转挂在 modal 回调上（部分环境弹窗会被吞，导致永远不跳转、用户重复下单）
       if (result && result.qrWarning) {
         console.warn('[create-order]', result.qrWarning)
-        wx.showModal({
-          title: '小程序码生成失败',
-          content: result.qrWarning,
-          showCancel: false,
-          confirmText: '知道了',
-          success: goDetail
-        })
-      } else {
-        goDetail()
+        ui.toast('小程序码生成失败，可在详情页重新生成', 'none', 2500)
+      }
+      if (order.id) {
+        wx.navigateTo({ url: `/pages/order-detail/index?id=${order.id}` })
       }
     } catch (e) {
       ui.hideLoading()
@@ -351,13 +347,13 @@ Page({
     const orderId = event.currentTarget.dataset.id
     const order = this.data.copyOrders.find((o) => o.id === orderId)
     if (!order) return
-    const selectedSteps = (order.stepKeys || []).map((key, index) => {
+    const selectedSteps = this._renumberSteps((order.stepKeys || []).map((key, index) => {
       const proc = this.data.processList.find((p) => p.key === key)
       return proc ? {
         ...proc,
         instanceId: `${key}_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`
       } : null
-    }).filter(Boolean)
+    }).filter(Boolean))
 
     this.setData({
       form: {
@@ -404,14 +400,14 @@ Page({
     const tpl = this.data.templates.find(t => t._id === id)
     const tplName = tpl ? tpl.name : ''
     const processMap = Object.fromEntries(this.data.processList.map(p => [p.key, p]))
-    const newSelectedSteps = stepKeys.map((key, index) => {
+    const newSelectedSteps = this._renumberSteps(stepKeys.map((key, index) => {
       const proc = processMap[key]
       if (!proc) return null
       return {
         ...proc,
         instanceId: `${key}_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`
       }
-    }).filter(Boolean)
+    }).filter(Boolean))
 
     if (newSelectedSteps.length === 0) {
       ui.toast('模板中的工序在当前工序库不存在')

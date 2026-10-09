@@ -7,27 +7,106 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 const db = cloud.database()
 const _ = db.command
 
-// 工序库（权威源，修改后需同步到：completeStep/index.js、createOrder/index.js、miniprogram/utils/api.js）
+// 工序库（权威源，修改后需同步到：completeStep/index.js、createOrder/index.js、
+//          init-db/index.js、miniprogram/utils/api.js）
+//
+// 标记说明：
+//   needPartner:    该工序完成后必须指定一名「配合人员」（默认是编程员）
+//   partnerKeyword: 配合人员的岗位关键字（默认「编程」）——用于筛人 + 后端校验
+//   partnerLabel:   配合人员的界面称谓（默认「编程员」）——如打字工序为「调字员」
+//   repeatable + maxRepeat: 该工序可重复多道（如精车最多 4 道：精车1~精车4），
+//     完成时由操作面板选择「本工单共需几道」，后端按需追加/回收未完成的重复工序
+//
+// 兼容：旧字段 needProgrammer 仍然被识别（等价于 needPartner），
+//       避免云函数分批部署时出现前后端标记不一致。
 const PROCESS_LIBRARY = [
   { key: 'blanking', name: '下料', station: '下料工' },
-  { key: 'pressing', name: '敦压', station: '敦压工' },
-  { key: 'programming', name: '编程', station: '编程工' },
-  { key: 'pulling_tail', name: '拉尾子', station: '拉尾工' },
-  { key: 'finish_turning', name: '精车', station: '精车工' },
-  { key: 'milling_head', name: '铣方头', station: '铣床工' },
+  { key: 'pressing', name: '敦压', station: '敦压工', needPartner: true },
+  { key: 'pulling_tail', name: '拉尾子', station: '拉尾工', needPartner: true },
+  { key: 'finish_turning', name: '精车', station: '精车工', needPartner: true, repeatable: true, maxRepeat: 4 },
+  { key: 'milling_head', name: '铣方头', station: '铣床工', needPartner: true },
   { key: 'tapping', name: '攻丝', station: '攻丝工' },
   { key: 'drilling_head', name: '打方头孔', station: '钻床工' },
   { key: 'tapping_repeat', name: '攻丝（复攻）', station: '攻丝工' },
   { key: 'threading', name: '压螺纹', station: '螺纹工' },
   { key: 'polishing', name: '压光', station: '抛光工' },
-  { key: 'marking', name: '打字', station: '打字工' },
+  { key: 'marking', name: '打字', station: '打字工', needPartner: true, partnerKeyword: '调字', partnerLabel: '调字员' },
   { key: 'heat_treatment', name: '热处理', station: '热处理工' },
   { key: 'quality_check', name: '质检', station: '质检员' },
   { key: 'warehouse', name: '入库', station: '仓管员' }
 ]
 
-// 构建 O(1) 查找字典（避免重复 .find() 遍历）
-const PROCESS_MAP = Object.fromEntries(PROCESS_LIBRARY.map(p => [p.key, p]))
+// 已下线的工序：不再出现在「可选工序」，但老工单 stepKeys 可能仍带「编程」，
+// buildSteps 必须仍能解析，否则历史工单丢工序、撤回/完成找不到定义
+const LEGACY_PROCESSES = {
+  programming: { key: 'programming', name: '编程', station: '编程工' }
+}
+
+// 构建 O(1) 查找字典（避免重复 .find() 遍历）；在用工序 + 已下线工序都要能查到
+const PROCESS_MAP = Object.fromEntries(
+  PROCESS_LIBRARY.map(p => [p.key, p]).concat(Object.entries(LEGACY_PROCESSES))
+)
+
+// 配合人员的默认配置（未在工序里单独指定时使用）
+const DEFAULT_PARTNER_KEYWORD = '编程'
+const DEFAULT_PARTNER_LABEL = '编程员'
+// 配合人员的兜底岗位名（原「编程」工序的岗位；工序下线后岗位仍需可分配）
+const DEFAULT_PARTNER_STATION = '编程工'
+
+/**
+ * 归一化某工序的「配合人员」配置
+ * @returns {{ need: boolean, keyword: string, label: string, station: string }}
+ */
+function resolvePartner(step) {
+  const need = !!(step && (step.needPartner || step.needProgrammer))
+  return {
+    need,
+    keyword: (step && step.partnerKeyword) || DEFAULT_PARTNER_KEYWORD,
+    label: (step && step.partnerLabel) || DEFAULT_PARTNER_LABEL,
+    // 兜底用的岗位名（与编程员岗位保持一致，用于「系统里有没有这类人」的判断）
+    station: (step && step.partnerStation) || DEFAULT_PARTNER_STATION
+  }
+}
+
+/**
+ * 把 stepKeys 展开成工序对象数组
+ *
+ * 【重复工序编号】同一个 key 出现多次时自动编号：精车 → 精车1 / 精车2 / 精车3 / 精车4
+ * 注入字段：
+ *   _index       在 stepKeys 中的位置（与 currentStepIndex 对齐）
+ *   _seq         这是该工序的第几道（从 1 开始）
+ *   _repeatTotal 该工序在本工单中共排了几道
+ *
+ * 注意：必须用本函数统一构建 steps，前端与管理端才能拿到一致的编号与标记。
+ */
+function buildSteps(stepKeys) {
+  const keys = Array.isArray(stepKeys) ? stepKeys : []
+  const totalMap = {}
+  keys.forEach(k => { totalMap[k] = (totalMap[k] || 0) + 1 })
+
+  const seqMap = {}
+  const steps = []
+  keys.forEach((k, i) => {
+    const def = PROCESS_MAP[k]
+    if (!def) return
+    seqMap[k] = (seqMap[k] || 0) + 1
+    const total = totalMap[k]
+    const partner = resolvePartner(def)
+    steps.push({
+      ...def,
+      // 归一化「配合人员」配置：前端统一读 needProgrammer / partnerLabel / partnerKeyword
+      needPartner: partner.need,
+      needProgrammer: partner.need,
+      partnerKeyword: partner.keyword,
+      partnerLabel: partner.label,
+      _index: i,
+      _seq: seqMap[k],
+      _repeatTotal: total,
+      name: total > 1 ? `${def.name}${seqMap[k]}` : def.name
+    })
+  })
+  return steps
+}
 
 // 粗度系数表（权威源，修改后需同步到 miniprogram/utils/api.js）
 const ROUGHNESS_COEFFICIENTS = {
@@ -89,7 +168,12 @@ function getOrderCategory(order) {
 }
 
 function enrichOrder(order) {
-  const steps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
+  const steps = buildSteps(order.stepKeys)
+  const curIdx = Number(order.currentStepIndex) || 0
+  // 【修复】原来用 Math.min 把越界下标夹回最后一个工序，导致已完工工单
+  // 「当前工序」显示成「入库·仓管员」；现在越界时明确显示「已完成」
+  const isAllDone = steps.length > 0 && curIdx >= steps.length
+  const curStep = (!isAllDone && steps[curIdx]) ? steps[curIdx] : null
   return {
     ...order,
     steps,
@@ -97,9 +181,9 @@ function enrichOrder(order) {
     category: getOrderCategory(order),
     categoryLabel: getOrderStatusLabel(order),
     statusLabel: getOrderStatusLabel(order),
-    progress: steps.length > 0 ? Math.min(Math.round((order.currentStepIndex / steps.length) * 100), 100) : 0,
-    currentStepName: steps.length > 0 ? ((steps[Math.min(order.currentStepIndex, steps.length - 1)] || {}).name || '已完成') : '无工序',
-    currentStation: steps.length > 0 ? ((steps[Math.min(order.currentStepIndex, steps.length - 1)] || {}).station || '入库完成') : ''
+    progress: steps.length > 0 ? Math.min(Math.round((curIdx / steps.length) * 100), 100) : 0,
+    currentStepName: steps.length === 0 ? '无工序' : (isAllDone ? '已完成' : curStep.name),
+    currentStation: steps.length === 0 ? '' : (isAllDone ? '入库完成' : curStep.station)
   }
 }
 
@@ -259,7 +343,12 @@ async function toggleUrgent(orderId, urgent, user) {
 }
 
 // 撤回已完成工序
-async function revertStep(orderId, stepKey, user) {
+//
+// stepIndex（可选，推荐传）：被撤回工序在工序列表中的下标。
+// 【为什么需要】精车等可重复工序在同一工单里会出现多条相同 stepKey（精车1/精车2/精车3），
+// 仅凭 stepKey 只能定位到「最后一次完成的那道」，导致在精车1 上点撤回实际撤掉了精车3。
+// 传入 stepIndex 后按位置精确定位（history 下标与工序下标一一对应）。
+async function revertStep(orderId, stepKey, stepIndex, user) {
   requireAdmin(user)
   if (!orderId || !stepKey) throw new Error('缺少工单ID或工序标识')
 
@@ -267,15 +356,25 @@ async function revertStep(orderId, stepKey, user) {
   if (res.data.length === 0) throw new Error('工单不存在')
   const order = res.data[0]
 
-  const steps = (order.stepKeys || []).map(k => PROCESS_MAP[k]).filter(Boolean)
+  const steps = buildSteps(order.stepKeys)
   const stepDef = PROCESS_MAP[stepKey]
   if (!stepDef) throw new Error(`未知工序：${stepKey}`)
+  if (steps.length > 0 && !steps.some(s => s.key === stepKey)) {
+    throw new Error(`该工序不在本工单的工序列表中：${stepDef.name}`)
+  }
 
   // history 是按完成顺序追加，从尾部向前找最后完成的匹配工序
   const history = order.history || []
   let lastHistoryIdx = -1
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].stepKey === stepKey) { lastHistoryIdx = i; break }
+
+  // 优先按传入下标精确定位（可重复工序必需）
+  const idxNum = Number(stepIndex)
+  if (Number.isInteger(idxNum) && idxNum >= 0 && idxNum < history.length && history[idxNum].stepKey === stepKey) {
+    lastHistoryIdx = idxNum
+  } else {
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].stepKey === stepKey) { lastHistoryIdx = i; break }
+    }
   }
   if (lastHistoryIdx < 0) throw new Error('该工序尚未完成，无法撤回')
 
@@ -596,15 +695,22 @@ async function updateStepKeys(orderId, newStepKeys, user) {
 }
 
 // 更新工单图纸（管理员）
-async function updateDrawings(orderId, drawings, user) {
+/**
+ * 更新图纸
+ * @param {string} mode 'append'(默认,追加新上传的图纸) | 'replace'(整体覆盖,用于删除后同步)
+ */
+async function updateDrawings(orderId, drawings, user, mode) {
   requireAdmin(user)
   const res = await db.collection('orders').where({ id: orderId }).get()
   if (res.data.length === 0) throw new Error('工单不存在')
   const order = res.data[0]
 
-  // 合并现有图纸和新图纸
+  // replace: 完全用传入列表覆盖（删除场景）
+  // append: 合并现有图纸和新图纸（上传场景）
   const existingDrawings = order.drawings || []
-  const allDrawings = [...existingDrawings, ...drawings]
+  const allDrawings = mode === 'replace'
+    ? (Array.isArray(drawings) ? drawings : [])
+    : [...existingDrawings, ...(Array.isArray(drawings) ? drawings : [])]
 
   await db.collection('orders').doc(order._id).update({
     data: { drawings: allDrawings, updatedAt: db.serverDate() }
@@ -612,7 +718,13 @@ async function updateDrawings(orderId, drawings, user) {
 
   try {
     await db.collection('audit_logs').add({
-      data: { action: '上传图纸', targetId: orderId, operatorId: user._id, operatorName: user.name, createdAt: db.serverDate() }
+      data: {
+        action: mode === 'replace' ? '更新图纸列表' : '上传图纸',
+        targetId: orderId,
+        operatorId: user._id,
+        operatorName: user.name,
+        createdAt: db.serverDate()
+      }
     })
   } catch (e) { /* 非关键 */ }
 
@@ -911,14 +1023,22 @@ async function fetchOrdersForStats() {
 async function getEmployeeMonthlyProduction(employeeId, year) {
   const ordersData = await fetchOrdersForStats()
   const rows = []
+  // 配合根数：同一份 history 记录里，若该员工是「配合人员」（编程员/调字员）则额外计入
+  const progRows = []
   for (const order of ordersData) {
     for (const record of (order.history || [])) {
-      if (!record.operator || record.operator === '系统流转') continue
-      if (record.operatorId !== employeeId) continue
       const monthMatch = String(record.completedAt || '').match(/^(\d{4}-\d{2})/)
       const monthKey = monthMatch ? monthMatch[1] : ''
+      const qty = Number(record.qty) || 0
+
+      if (record.programmerId === employeeId && monthKey.startsWith(String(year))) {
+        progRows.push({ monthKey, qty })
+      }
+
+      if (!record.operator || record.operator === '系统流转') continue
+      if (record.operatorId !== employeeId) continue
       if (!monthKey.startsWith(String(year))) continue
-      rows.push({ orderId: order.id, customerName: order.customerName || '', qty: Number(record.qty) || 0, employeeId, employeeName: record.operator, monthKey, completedAt: record.completedAt })
+      rows.push({ orderId: order.id, customerName: order.customerName || '', qty, employeeId, employeeName: record.operator, monthKey, completedAt: record.completedAt })
     }
   }
 
@@ -927,8 +1047,10 @@ async function getEmployeeMonthlyProduction(employeeId, year) {
     label: `${i + 1}月`
   }))
   const monthlyMap = {}
-  months.forEach(m => { monthlyMap[m.key] = 0 })
+  const progMonthlyMap = {}
+  months.forEach(m => { monthlyMap[m.key] = 0; progMonthlyMap[m.key] = 0 })
   rows.forEach(r => { if (monthlyMap[r.monthKey] !== undefined) monthlyMap[r.monthKey] += r.qty })
+  progRows.forEach(r => { if (progMonthlyMap[r.monthKey] !== undefined) progMonthlyMap[r.monthKey] += r.qty })
 
   let employee = null
   try {
@@ -937,6 +1059,7 @@ async function getEmployeeMonthlyProduction(employeeId, year) {
   } catch (e) { /* ignore */ }
 
   const monthlyRoots = months.map(m => ({ id: employeeId, ...m, roots: monthlyMap[m.key] || 0 }))
+  const programmerMonthlyRoots = months.map(m => ({ id: employeeId, ...m, roots: progMonthlyMap[m.key] || 0 }))
   // 使用 UTC+8 中国时区计算当前月份，避免月初凌晨 0-8 点 UTC 仍是上月导致 currentMonthRoots 取错
   const chinaNow = new Date(Date.now() + 8 * 60 * 60 * 1000)
   const currentMonthIndex = chinaNow.getUTCMonth()
@@ -945,7 +1068,10 @@ async function getEmployeeMonthlyProduction(employeeId, year) {
     year,
     totalRoots: monthlyRoots.reduce((s, m) => s + m.roots, 0),
     monthlyRoots,
-    currentMonthRoots: (monthlyRoots[currentMonthIndex] || {}).roots || 0
+    currentMonthRoots: (monthlyRoots[currentMonthIndex] || {}).roots || 0,
+    programmerTotalRoots: programmerMonthlyRoots.reduce((s, m) => s + m.roots, 0),
+    programmerMonthlyRoots,
+    programmerCurrentMonthRoots: (programmerMonthlyRoots[currentMonthIndex] || {}).roots || 0
   }
 }
 
@@ -965,20 +1091,34 @@ async function getAllEmployeesMonthlyProduction(year) {
 
   const empMap = {}
   activeEmps.forEach(e => {
-    empMap[e._id] = { employee: { id: e._id, name: e.name, stations: e.stations || [], role: e.role, status: e.status }, monthlyMap: {} }
-    months.forEach(m => { empMap[e._id].monthlyMap[m.key] = 0 })
+    empMap[e._id] = {
+      employee: { id: e._id, name: e.name, stations: e.stations || [], role: e.role, status: e.status },
+      monthlyMap: {},
+      progMonthlyMap: {}
+    }
+    months.forEach(m => { empMap[e._id].monthlyMap[m.key] = 0; empMap[e._id].progMonthlyMap[m.key] = 0 })
   })
 
   // 单次遍历所有工单历史，按 operatorId 分组累加
   for (const order of ordersData) {
     for (const record of (order.history || [])) {
+      const monthMatch = String(record.completedAt || '').match(/^(\d{4}-\d{2})/)
+      const monthKey = monthMatch ? monthMatch[1] : ''
+      const qty = Number(record.qty) || 0
+
+      // 配合根数：该记录的配合人员（敦压/拉尾子/精车/铣方头=编程员，打字=调字员）
+      if (record.programmerId) {
+        const progStat = empMap[record.programmerId]
+        if (progStat && progStat.progMonthlyMap[monthKey] !== undefined) {
+          progStat.progMonthlyMap[monthKey] += qty
+        }
+      }
+
       if (!record.operator || !record.operatorId || record.operator === '系统流转') continue
       const stat = empMap[record.operatorId]
       if (!stat) continue
-      const monthMatch = String(record.completedAt || '').match(/^(\d{4}-\d{2})/)
-      const monthKey = monthMatch ? monthMatch[1] : ''
       if (stat.monthlyMap[monthKey] !== undefined) {
-        stat.monthlyMap[monthKey] += (Number(record.qty) || 0)
+        stat.monthlyMap[monthKey] += qty
       }
     }
   }
@@ -986,13 +1126,20 @@ async function getAllEmployeesMonthlyProduction(year) {
   // 使用 UTC+8 中国时区计算当前月份，与 formatTime 保持一致
   const chinaNow = new Date(Date.now() + 8 * 60 * 60 * 1000)
   const currentMonthIndex = chinaNow.getUTCMonth()
-  return Object.values(empMap).map(stat => ({
-    employee: stat.employee,
-    year,
-    totalRoots: Object.values(stat.monthlyMap).reduce((s, v) => s + v, 0),
-    monthlyRoots: months.map(m => ({ id: stat.employee.id, ...m, roots: stat.monthlyMap[m.key] || 0 })),
-    currentMonthRoots: stat.monthlyMap[(months[currentMonthIndex] || {}).key] || 0
-  }))
+  return Object.values(empMap).map(stat => {
+    const programmerMonthlyRoots = months.map(m => ({ id: stat.employee.id, ...m, roots: stat.progMonthlyMap[m.key] || 0 }))
+    return {
+      employee: stat.employee,
+      year,
+      totalRoots: Object.values(stat.monthlyMap).reduce((s, v) => s + v, 0),
+      monthlyRoots: months.map(m => ({ id: stat.employee.id, ...m, roots: stat.monthlyMap[m.key] || 0 })),
+      currentMonthRoots: stat.monthlyMap[(months[currentMonthIndex] || {}).key] || 0,
+      // 配合根数（编程员/调字员维度，仅需配合人员的工序产生）
+      programmerTotalRoots: programmerMonthlyRoots.reduce((s, m) => s + m.roots, 0),
+      programmerMonthlyRoots,
+      programmerCurrentMonthRoots: programmerMonthlyRoots[currentMonthIndex] ? programmerMonthlyRoots[currentMonthIndex].roots : 0
+    }
+  })
 }
 
 // 获取所有生产明细行（批量，服务器端聚合）
@@ -1009,6 +1156,11 @@ async function getProductionRows() {
         qty: Number(record.qty) || 0,
         employeeId: record.operatorId || '',
         employeeName: record.operator,
+        // 配合人员（敦压/拉尾子/精车/铣方头 = 编程员；打字 = 调字员）
+        programmerId: record.programmerId || '',
+        programmerName: record.programmerName || '',
+        partnerRole: record.partnerRole || DEFAULT_PARTNER_LABEL,
+        partnerKeyword: record.partnerKeyword || DEFAULT_PARTNER_KEYWORD,
         monthKey: monthMatch ? monthMatch[1] : '',
         completedAt: record.completedAt,
         stepName: record.stepName,
@@ -1167,7 +1319,7 @@ exports.main = async (event, context) => {
 
       case 'revertStep':
         if (!event.orderId || !event.stepKey) return { success: false, error: '缺少参数' }
-        return { success: true, order: await revertStep(event.orderId, event.stepKey, user) }
+        return { success: true, order: await revertStep(event.orderId, event.stepKey, event.stepIndex, user) }
 
       case 'updateStepKeys':
         if (!event.orderId || !event.stepKeys) return { success: false, error: '缺少参数' }
@@ -1175,7 +1327,7 @@ exports.main = async (event, context) => {
 
       case 'updateDrawings':
         if (!event.orderId || !event.drawings) return { success: false, error: '缺少参数' }
-        return { success: true, order: await updateDrawings(event.orderId, event.drawings, user) }
+        return { success: true, order: await updateDrawings(event.orderId, event.drawings, user, event.mode) }
 
       case 'updateOrderFields':
         if (!event.orderId || !event.fields) return { success: false, error: '缺少参数' }
@@ -1209,6 +1361,10 @@ exports.main = async (event, context) => {
       case 'productionRows':
         return { success: true, rows: await getProductionRows() }
 
+      case 'drawingUrls':
+        // 服务端解析图纸临时链接（管理员权限，不受客户端存储安全规则限制）
+        return resolveDrawingUrls(event.fileIDs)
+
       case 'listLogs':
         return { success: true, logs: await listLogs(event.days) }
 
@@ -1225,4 +1381,25 @@ exports.main = async (event, context) => {
   } catch (err) {
     return { success: false, error: err.message || '操作失败' }
   }
+}
+
+/**
+ * 服务端解析文件临时链接（drawingUrls action）
+ * 云函数以管理员权限运行，不受客户端存储安全规则限制——
+ * 客户端因存储权限（如「仅创建者可读写」）拿不到下载链接
+ * （getTempFileURL 无结果 / downloadFile 报 empty download url）时，走这里兜底。
+ */
+async function resolveDrawingUrls(fileIDs) {
+  const list = (Array.isArray(fileIDs) ? fileIDs : [])
+    .filter(id => typeof id === 'string' && id.indexOf('cloud://') === 0)
+    .slice(0, 50)
+  if (list.length === 0) return { success: false, error: '缺少有效的文件ID' }
+  const res = await cloud.getTempFileURL({ fileList: list })
+  const urls = ((res && res.fileList) || []).map(item => ({
+    fileID: item.fileID,
+    tempFileURL: item.tempFileURL || '',
+    status: item.status,
+    errMsg: item.errMsg || ''
+  }))
+  return { success: true, urls }
 }

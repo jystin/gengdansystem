@@ -49,19 +49,18 @@ Page({
       return
     }
     this.setData({ isAdmin: api.isCurrentUserAdmin() })
-    if (!this._hasCategoryFromUrl) {
-      this.refresh()
-    }
+    // 每次回到列表页都重新拉取：工单状态（逾期/未开始/生产中）是按交期等字段
+    // 实时派生的，详情页改交期/完成工序后必须刷新，分类才能即时归位
+    // （旧逻辑带分类参数进入后永不刷新，导致「已逾期」里的工单改完交期还挂在原分类）
+    this.refresh()
   },
 
   onLoad(options) {
     if (options && options.category) {
       const validCategory = CATEGORY_OPTIONS.find(o => o.key === options.category)
       if (validCategory) {
-        this._hasCategoryFromUrl = true
-        this.setData({ activeCategory: validCategory.key }, () => {
-          this.refresh()
-        })
+        // 只设置分类，首次刷新交给随后的 onShow（onLoad 先于 onShow 执行）
+        this.setData({ activeCategory: validCategory.key })
       }
     }
   },
@@ -394,13 +393,21 @@ Page({
         return '工单导出'
       })()
 
-      await exportOrders(orders, name)
+      const res = await exportOrders(orders, name)
       ui.hideLoading()
+      if (res && res.mode === 'disk') {
+        ui.toast('已保存到所选目录，双击即可打开', 'success', 2500)
+      }
       this.setData({ selectMode: false, selectedSet: {}, selectedCount: 0 }, () => {
         this._refreshCheckState()
       })
     } catch (e) {
       ui.hideLoading()
+      // 开发者工具不支持「另存为」：给明确指引，不当作普通导出失败
+      if (e && e.code === 'DEVTOOLS_UNSUPPORTED') {
+        ui.toast('开发者工具不支持「另存为」，请在电脑版微信中导出', 'none', 3500)
+        return
+      }
       ui.handleError(e, '导出失败')
     }
   },

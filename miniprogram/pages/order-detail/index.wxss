@@ -169,6 +169,49 @@
   border-bottom-left-radius: 12rpx;
 }
 
+/* ===== 图纸文件卡片（PDF 等非图片文件） ===== */
+.drawing-file-card {
+  background: #fff7f7;
+}
+
+.drawing-file {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10rpx;
+  padding: 16rpx;
+  box-sizing: border-box;
+}
+
+/* 待上传的 PDF 卡片底部留出「待上传」角标空间 */
+.drawing-pending .drawing-file {
+  padding-bottom: 52rpx;
+}
+
+.drawing-file-icon {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #dc2626;
+  background: #ffffff;
+  border: 2rpx solid #fca5a5;
+  border-radius: 8rpx;
+  padding: 4rpx 16rpx;
+  letter-spacing: 1rpx;
+}
+
+.drawing-file-name {
+  width: 100%;
+  font-size: 18rpx;
+  color: #64748b;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .drawing-save-bar {
   display: flex;
   gap: 16rpx;
@@ -231,6 +274,76 @@
   margin-right: 4rpx;
 }
 
+/* 表单标签里的浅色说明（如「本工序需要先编程」） */
+.form-label-tip {
+  margin-left: 12rpx;
+  font-size: 20rpx;
+  font-weight: 400;
+  color: #94a3b8;
+}
+
+/* 表单下方的说明 / 警示文案 */
+.form-hint {
+  margin-top: 10rpx;
+  font-size: 20rpx;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.form-hint.warm {
+  color: #b45309;
+  background: #fffbeb;
+  border: 1rpx solid #fde68a;
+  border-radius: 10rpx;
+  padding: 10rpx 14rpx;
+}
+
+/* 可重复工序（精车）道数选择 */
+.repeat-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+}
+
+.repeat-option {
+  min-width: 108rpx;
+  height: 68rpx;
+  padding: 0 20rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26rpx;
+  color: #334155;
+  background: #f8fafc;
+  border: 2rpx solid #e2e8f0;
+  border-radius: 12rpx;
+}
+
+.repeat-option.active {
+  color: #ffffff;
+  font-weight: 600;
+  background: linear-gradient(135deg, #0f766e, #0d9488);
+  border-color: transparent;
+}
+
+/* 工序列表中「需编程」小标签 */
+.step-name-wrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.step-tag {
+  flex-shrink: 0;
+  margin-left: 8rpx;
+  padding: 2rpx 10rpx;
+  font-size: 18rpx;
+  line-height: 1.6;
+  color: #7c3aed;
+  background: #f3e8ff;
+  border-radius: 999rpx;
+}
+
 .form-input {
   width: 100%;
   height: 80rpx;
@@ -245,6 +358,27 @@
 
 .form-input:focus {
   border-color: #0f766e;
+}
+
+/* 下拉选择器（材料类型）—— 与 form-input 同一套视觉，
+   之前误用了本页未定义的 .input，渲染成「没有框的纯文字」，容易漏填 */
+.form-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 80rpx;
+  padding: 0 24rpx;
+  border: 2rpx solid #e2e8f0;
+  border-radius: 12rpx;
+  background: #ffffff;
+  font-size: 28rpx;
+  color: #1e293b;
+  box-sizing: border-box;
+}
+
+.form-picker .placeholder {
+  color: #94a3b8;
 }
 
 .form-textarea {
@@ -304,6 +438,65 @@
 .qr-image-text {
   width: 240rpx;
   height: 240rpx;
+  opacity: 0.85;
+}
+
+/* 二维码保存操作区 */
+.qr-tip {
+  margin-top: 10rpx;
+  padding: 12rpx 16rpx;
+  border-radius: 12rpx;
+  background: #f0fdfa;
+  border: 1rpx solid #ccfbf1;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #0f766e;
+}
+
+.qr-tip-warn {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.qr-tip-strong {
+  font-weight: 700;
+  color: inherit;
+  text-decoration: underline;
+}
+
+.qr-tools {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  margin-top: 14rpx;
+}
+
+.qr-tool {
+  padding: 6rpx 22rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #0f766e;
+  background: #ffffff;
+  border: 1rpx solid #99f6e4;
+}
+
+/* 主操作（另存为）：实心，和「复制链接」拉开层级 */
+.qr-tool-primary {
+  color: #ffffff;
+  background: linear-gradient(135deg, #0f766e, #0d9488);
+  border-color: transparent;
+  font-weight: 600;
+  padding: 6rpx 28rpx;
+}
+
+.qr-tool:active {
+  background: #ccfbf1;
+}
+
+.qr-tool-primary:active {
+  background: linear-gradient(135deg, #0f766e, #0d9488);
   opacity: 0.85;
 }
 
@@ -914,6 +1107,11 @@
 
 .edit-input:focus {
   border-color: #0f766e;
+}
+
+/* 日期 picker 的展示层复用 .edit-input；未选择时显示占位色 */
+.edit-input.placeholder {
+  color: #94a3b8;
 }
 
 .detail-input {

@@ -427,6 +427,27 @@
   margin-bottom: 20rpx; gap: 12rpx; flex-wrap: wrap;
 }
 
+/* 统计口径切换（操作根数 / 配合根数） */
+.prod-mode-switch {
+  display: flex; gap: 8rpx; padding: 6rpx;
+  background: #f1f5f9; border-radius: 12rpx; margin-bottom: 10rpx;
+}
+
+.prod-mode-item {
+  flex: 1; text-align: center; padding: 12rpx 0;
+  font-size: 24rpx; color: #475569; border-radius: 10rpx;
+}
+
+.prod-mode-item.active {
+  color: #ffffff; font-weight: 600;
+  background: linear-gradient(135deg, #0f766e, #0d9488);
+}
+
+.prod-mode-tip {
+  font-size: 20rpx; color: #94a3b8; line-height: 1.5;
+  margin-bottom: 14rpx;
+}
+
 .prod-emp-picker {
   padding: 14rpx 24rpx;
   border: 2rpx solid #e2e8f0; border-radius: 12rpx;

@@ -16,11 +16,11 @@ Page({
     if (app.globalData.accessState === 'disabled') {
       ui.toast('您的账号已被管理员移除，可重新提交申请', 'none')
     }
-    // 加载系统预设岗位列表
+    // 加载系统预设岗位列表（工序岗位 + 非工序岗位，如「调字员」）
     this.setData({
-      allStations: api.getProcessLibrary().map(p => ({
-        station: p.station,
-        name: p.name,
+      allStations: api.getSelectableStations().map(s => ({
+        station: s.station,
+        name: s.name,
         checked: false
       }))
     })

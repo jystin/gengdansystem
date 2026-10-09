@@ -49,20 +49,23 @@
     </view>
 
     <view style="margin-top: 16rpx;">
-      <view class="subtitle" style="margin-bottom: 12rpx;">图纸（拍照上传）</view>
+      <view class="subtitle" style="margin-bottom: 12rpx;">图纸（{{isDesktopPlatform ? '上传文件 / 图片' : '拍照上传'}}）</view>
       <view class="drawing-list">
         <view wx:if="{{form.drawings.length === 0}}" class="empty-hint">暂无图纸</view>
         <block wx:else>
-          <view wx:for="{{form.drawings}}" wx:key="name" class="drawing-item">
+          <view wx:for="{{form.drawings}}" wx:key="key" class="drawing-item" bindtap="previewDrawing" data-index="{{index}}">
             <view class="drawing-info">
-              <view class="drawing-name">{{item.name}}</view>
-              <view class="drawing-size">{{item.size}} 字节</view>
+              <view class="drawing-name-row">
+                <text class="drawing-tag {{item.isPDF ? 'tag-pdf' : 'tag-img'}}">{{item.isPDF ? 'PDF' : '图片'}}</text>
+                <text class="drawing-name">{{item.name}}</text>
+              </view>
+              <view class="drawing-size">{{item.sizeText || item.size}}</view>
             </view>
-            <button class="delete-btn" bindtap="removeDrawing" data-index="{{index}}">删除</button>
+            <button class="delete-btn" catchtap="removeDrawing" data-index="{{index}}">删除</button>
           </view>
         </block>
       </view>
-      <button class="upload-btn" bindtap="chooseDrawing">+ 上传图纸</button>
+      <button class="upload-btn" bindtap="chooseDrawing">{{isDesktopPlatform ? '+ 上传图纸（支持 PDF）' : '+ 上传图纸'}}</button>
     </view>
 
     <view style="margin-top: 16rpx;">
@@ -195,23 +198,23 @@
 
   <!-- 保存模板弹窗 -->
   <view wx:if="{{showSaveTemplateModal}}" class="modal-mask" catchtouchmove>
-    <view class="modal-box">
+    <view class="modal-content" style="padding:32rpx;">
       <view class="modal-title">保存为固定工序模板</view>
-      <view class="subtle" style="text-align:center;margin-bottom:24rpx;">将当前已选工序（{{form.selectedStepKeys.length}} 个）保存为模板，下次创建工单时可一键导入。</view>
+      <view class="subtle" style="text-align:center;margin:20rpx 0 24rpx;">将当前已选工序（{{form.selectedStepKeys.length}} 个）保存为模板，下次创建工单时可一键导入。</view>
 
-      <view class="form-field">
-        <view class="form-label">模板名称<text class="required">*</text></view>
+      <view class="form-field" style="margin-bottom:20rpx;">
+        <view class="field-label">模板名称<text class="required">*</text></view>
         <input class="input" placeholder="如：标准螺丝流程、盘头外六角等" value="{{templateName}}" bindinput="bindTemplateName" cursor-spacing="20" hold-keyboard="{{true}}" />
       </view>
 
-      <view class="form-field">
-        <view class="form-label">描述（选填）</view>
+      <view class="form-field" style="margin-bottom:20rpx;">
+        <view class="field-label">描述（选填）</view>
         <input class="input" placeholder="简短说明用途" value="{{templateDesc}}" bindinput="bindTemplateDesc" cursor-spacing="20" hold-keyboard="{{true}}" />
       </view>
 
       <view class="modal-actions">
-        <button class="secondary-btn" bindtap="closeSaveTemplateModal">取消</button>
-        <button class="primary-btn" bindtap="submitSaveTemplate">保存模板</button>
+        <button class="modal-btn cancel" bindtap="closeSaveTemplateModal">取消</button>
+        <button class="primary-btn" style="flex:1;" bindtap="submitSaveTemplate">保存模板</button>
       </view>
     </view>
   </view>

@@ -43,7 +43,10 @@ Page({
           year: String(new Date().getFullYear()),
           totalRoots: 0,
           currentMonthRoots: 0,
-          monthlyRoots: []
+          monthlyRoots: [],
+          programmerTotalRoots: 0,
+          programmerCurrentMonthRoots: 0,
+          programmerMonthlyRoots: []
         }
       })
     } catch (e) {
