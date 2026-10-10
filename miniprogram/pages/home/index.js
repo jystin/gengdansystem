@@ -78,6 +78,10 @@ Page({
     wx.navigateTo({ url: '/pages/orders/index' })
   },
 
+  goMyOrders() {
+    wx.navigateTo({ url: '/pages/my-orders/index' })
+  },
+
   goOrdersByCategory(event) {
     const category = event.currentTarget.dataset.category
     wx.navigateTo({ url: `/pages/orders/index?category=${category}` })

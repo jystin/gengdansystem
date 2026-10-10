@@ -1,0 +1,70 @@
+<view class="container page-my-orders">
+  <view class="top-left-home" bindtap="goToHome">
+    <text class="home-icon">⌂</text>
+  </view>
+
+  <view class="header card">
+    <view class="title">我的工单</view>
+    <view class="subtle">扫码进入工单后，当前工序匹配您的岗位即可认领</view>
+    <view class="tab-bar">
+      <view class="tab-item {{tab === 'pending' ? 'active' : ''}}" bindtap="switchTab" data-tab="pending">
+        <text>待完成</text>
+        <text wx:if="{{pending.length > 0}}" class="tab-count red">{{pending.length}}</text>
+      </view>
+      <view class="tab-item {{tab === 'done' ? 'active' : ''}}" bindtap="switchTab" data-tab="done">
+        <text>已完成</text>
+        <text wx:if="{{done.length > 0}}" class="tab-count blue">{{done.length}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 待完成 -->
+  <view wx:if="{{tab === 'pending'}}" class="list">
+    <block wx:for="{{pending}}" wx:key="claimId">
+      <view class="claim-card card {{item.order && item.order.urgent ? 'urgent' : ''}}" bindtap="openOrder" data-id="{{item.orderId}}">
+        <view class="row order-top">
+          <view class="order-id">{{item.orderId}}</view>
+          <text wx:if="{{item.order}}" class="badge {{item.order.category === 'notStarted' ? 'badge-grey' : item.order.category === 'paused' ? 'badge-warning' : item.order.category === 'completed' ? 'badge-success' : item.order.category === 'overdue' ? 'badge-danger' : item.order.category === 'urgent' ? 'badge-urgent' : 'badge-info'}}">{{item.order.statusLabel}}</text>
+        </view>
+        <view class="subtle" wx:if="{{item.order}}">{{item.order.customerName}}</view>
+        <view class="claim-line">
+          <text class="claim-step">{{item.stepName}}</text>
+          <text class="claim-time">认领于 {{item._claimedAt}}</text>
+        </view>
+        <view class="progress-line" wx:if="{{item.order}}">
+          <view class="progress-bar">
+            <view class="progress-fill" style="width: {{item.order.progress}}%"></view>
+          </view>
+          <text class="progress-text">{{item.order.progress}}%</text>
+        </view>
+        <view wx:if="{{item.order && item.order.activeClaim && item.order.activeClaim.userId !== item.userId}}" class="subtle warn-text">该工序认领已被管理员转移</view>
+      </view>
+    </block>
+    <view wx:if="{{!loading && pending.length === 0}}" class="empty-state card">
+      <view class="empty-title">暂无待完成的认领工单</view>
+      <view class="subtle">扫码进入工单，当前工序匹配您的岗位时即可认领</view>
+      <button class="empty-btn" bindtap="goScan">去扫码进单</button>
+    </view>
+  </view>
+
+  <!-- 已完成 -->
+  <view wx:if="{{tab === 'done'}}" class="list">
+    <block wx:for="{{done}}" wx:key="claimId">
+      <view class="claim-card card done" bindtap="openOrder" data-id="{{item.orderId}}">
+        <view class="row order-top">
+          <view class="order-id">{{item.orderId}}</view>
+          <text wx:if="{{item.order}}" class="badge {{item.order.category === 'completed' ? 'badge-success' : item.order.category === 'overdue' ? 'badge-danger' : 'badge-info'}}">{{item.order.statusLabel}}</text>
+        </view>
+        <view class="subtle" wx:if="{{item.order}}">{{item.order.customerName}}</view>
+        <view class="claim-line">
+          <text class="claim-step">{{item.stepName}}</text>
+          <text class="claim-time">完成于 {{item._completedAt}}</text>
+        </view>
+      </view>
+    </block>
+    <view wx:if="{{!loading && done.length === 0}}" class="empty-state card">
+      <view class="empty-title">暂无已完成的认领记录</view>
+      <view class="subtle">认领的工序完成并流转后，会自动出现在这里</view>
+    </view>
+  </view>
+</view>

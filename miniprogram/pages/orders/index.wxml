@@ -76,6 +76,15 @@
             <text class="progress-text">{{item.progress}}%</text>
           </view>
           <view class="subtle">当前工序：{{item.currentStepName}} · {{item.currentStation}}</view>
+          <!-- 普通分类：显示进行中的认领人 -->
+          <view wx:if="{{activeCategory !== 'claimedActive' && activeCategory !== 'claimedDone' && item.activeClaim}}" class="subtle claim-hint">🔒 {{item.activeClaim.userName}} 已认领「{{item.activeClaim.stepName}}」</view>
+          <!-- 认领分类：认领流水行（认领人 / 工序 / 时间，进行中的可撤销） -->
+          <view wx:if="{{item._claim}}" class="claim-row">
+            <text class="claim-chip {{item._claimStale ? 'chip-stale' : (item._claim.status === 'active' ? 'chip-active' : 'chip-done')}}">{{item._claimStale ? '已失效' : (item._claim.status === 'active' ? '认领中' : '认领完成')}}</text>
+            <text class="claim-person">{{item._claim.userName}} · {{item._claim.stepName}}</text>
+            <text class="claim-when">{{item._claimTime}}</text>
+            <button wx:if="{{isAdmin && item._claim.status === 'active' && !item._claimStale}}" size="mini" class="claim-revoke-btn" catchtap="revokeClaim" data-id="{{item.id}}">撤销</button>
+          </view>
         </view>
       </view>
     </block>

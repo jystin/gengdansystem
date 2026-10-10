@@ -192,6 +192,8 @@ exports.main = async (event, context) => {
       drawings: Array.isArray(drawings) ? drawings.slice(0, 20) : [],
       drawingDetail: safeDrawingDetail,
       history: [],
+      // 认领：新工单默认无人认领（老工单无此字段视为 null，claimOrder 已兼容）
+      activeClaim: null,
       remarks: remarks ? String(remarks).slice(0, 500) : '',
       orderDate: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
       completedDate: null,

@@ -8,6 +8,7 @@
     "pages/join/index",
     "pages/admin/index",
     "pages/profile/index",
+    "pages/my-orders/index",
     "pages/order-detail/index"
   ],
   "window": {

@@ -1139,3 +1139,84 @@
 .page-order-detail.editing-mode {
   padding-bottom: 140rpx;
 }
+
+/* ===== 工单认领 ===== */
+.claim-section {
+  margin-bottom: 20rpx;
+}
+
+.claim-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  padding: 18rpx 22rpx;
+  border-radius: 14rpx;
+  border: 1rpx solid #e2e8f0;
+}
+
+.claim-bar.free {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.claim-bar.mine {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.claim-bar.other {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.claim-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4rpx;
+  flex: 1;
+  min-width: 0;
+}
+
+.claim-main {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.claim-bar.mine .claim-main {
+  color: #15803d;
+}
+
+.claim-bar.other .claim-main {
+  color: #b45309;
+}
+
+.claim-sub {
+  font-size: 22rpx;
+  color: #64748b;
+}
+
+.claim-mini-btn {
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 24rpx;
+  line-height: 2.2;
+  border-radius: 999rpx;
+  padding: 0 24rpx;
+}
+
+.claim-mini-btn.primary {
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.claim-mini-btn.warn {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.claim-mini-btn:not(.primary):not(.warn) {
+  background: #f1f5f9;
+  color: #475569;
+}

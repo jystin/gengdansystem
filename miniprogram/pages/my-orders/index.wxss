@@ -1,0 +1,166 @@
+.page-my-orders {
+  padding-bottom: 40rpx;
+}
+
+.header {
+  margin-bottom: 20rpx;
+}
+
+/* ===== Tab 栏（与全站分类条一致的紧凑风格）===== */
+.tab-bar {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 20rpx;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  padding: 12rpx 28rpx;
+  border-radius: 999rpx;
+  background: #eef2f7;
+  color: #475569;
+  font-size: 28rpx;
+  font-weight: 500;
+}
+
+.tab-item.active {
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.tab-count {
+  min-width: 32rpx;
+  padding: 0 8rpx;
+  border-radius: 999rpx;
+  text-align: center;
+  font-size: 22rpx;
+  line-height: 32rpx;
+}
+
+.tab-count.red {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.tab-item.active .tab-count.red {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.tab-count.blue {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.tab-item.active .tab-count.blue {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+/* ===== 认领卡片 ===== */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+.claim-card {
+  padding: 24rpx;
+}
+
+.claim-card.urgent {
+  border-left: 6rpx solid #dc2626;
+}
+
+.claim-card.done {
+  opacity: 0.85;
+}
+
+.order-top {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.order-id {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.claim-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12rpx;
+}
+
+.claim-step {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #1d4ed8;
+}
+
+.claim-time {
+  font-size: 24rpx;
+  color: #94a3b8;
+}
+
+.progress-line {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-top: 14rpx;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 10rpx;
+  border-radius: 999rpx;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999rpx;
+  background: #1d4ed8;
+}
+
+.progress-text {
+  font-size: 22rpx;
+  color: #64748b;
+  min-width: 56rpx;
+  text-align: right;
+}
+
+.warn-text {
+  margin-top: 10rpx;
+  color: #b45309;
+}
+
+/* ===== 空状态 ===== */
+.empty-state {
+  padding: 48rpx 32rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.empty-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #334155;
+}
+
+.empty-btn {
+  margin-top: 16rpx;
+  padding: 0 48rpx;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 28rpx;
+  border-radius: 999rpx;
+  line-height: 72rpx;
+}

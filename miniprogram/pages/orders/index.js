@@ -12,10 +12,17 @@ const CATEGORY_OPTIONS = [
   { key: 'completed', label: '已完成' }
 ]
 
+// 管理员专属分类：全员认领视图（未完成的可就地撤销认领换人推进）
+const ADMIN_CATEGORY_OPTIONS = CATEGORY_OPTIONS.concat([
+  { key: 'claimedActive', label: '认领中' },
+  { key: 'claimedDone', label: '认领完成' }
+])
+
 Page({
   data: {
     keyword: '',
     orders: [],
+    claims: [],
     filteredOrders: [],
     activeCategory: 'all',
     categoryOptions: CATEGORY_OPTIONS,
@@ -48,7 +55,13 @@ Page({
     if (!app.requireActiveAccess('/pages/scan/index')) {
       return
     }
-    this.setData({ isAdmin: api.isCurrentUserAdmin() })
+    const isAdmin = api.isCurrentUserAdmin()
+    this.setData({
+      isAdmin,
+      // 管理员专属分类（认领中 / 认领完成）；非管理员回退基础分类防止残留
+      categoryOptions: isAdmin ? ADMIN_CATEGORY_OPTIONS : CATEGORY_OPTIONS,
+      ...(isAdmin ? {} : { activeCategory: CATEGORY_OPTIONS.some(o => o.key === this.data.activeCategory) ? this.data.activeCategory : 'all' })
+    })
     // 每次回到列表页都重新拉取：工单状态（逾期/未开始/生产中）是按交期等字段
     // 实时派生的，详情页改交期/完成工序后必须刷新，分类才能即时归位
     // （旧逻辑带分类参数进入后永不刷新，导致「已逾期」里的工单改完交期还挂在原分类）
@@ -69,14 +82,20 @@ Page({
     try {
       ui.showLoading('加载中...')
       const pageSize = 50
-      const orders = await api.listOrders(1, pageSize)
+      const isAdmin = this.data.isAdmin
+      // 管理员并行拉取认领列表（active + completed），供「认领中 / 认领完成」分类渲染
+      const [orders, claims] = await Promise.all([
+        api.listOrders(1, pageSize),
+        isAdmin ? api.listClaims('all').catch(() => []) : Promise.resolve([])
+      ])
       this.setData({
         page: 1,
         pageSize,
         hasMore: (orders || []).length >= pageSize,
         orders: orders || [],
-        filteredOrders: this._buildFiltered(orders || [])
+        claims: claims || []
       })
+      this._rebuildView()
     } catch (e) {
       ui.handleError(e, '加载工单失败')
     } finally {
@@ -85,10 +104,46 @@ Page({
   },
 
   /**
+   * 统一重建列表视图：
+   * - 认领分类（claimedActive / claimedDone）：以认领流水为主体（带工单概要与认领人）
+   * - 其余分类：走原有工单过滤逻辑
+   */
+  _rebuildView() {
+    const { activeCategory, keyword, claims, orders, selectedSet } = this.data
+    const isClaimView = activeCategory === 'claimedActive' || activeCategory === 'claimedDone'
+    let filteredOrders
+    if (isClaimView) {
+      const wantStatus = activeCategory === 'claimedActive' ? 'active' : 'completed'
+      filteredOrders = (claims || [])
+        .filter(c => c.status === wantStatus && c.order)
+        .map(c => ({
+          ...c.order,
+          // 已被撤销的进行中快照（管理员撤销后 activeClaim 清空，但流水还在 active 状态的边界）
+          // 保守处理：认领中视图只显示订单上 activeClaim 与流水一致的记录
+          _claimStale: wantStatus === 'active' && (!c.order.activeClaim || c.order.activeClaim.userId !== c.userId),
+          _claim: c,
+          _claimTime: String(wantStatus === 'active' ? c.claimedAt : (c.completedAt || c.claimedAt)).slice(0, 16),
+          _checked: !!selectedSet[c.orderId]
+        }))
+      if (keyword) {
+        filteredOrders = filteredOrders.filter(o => {
+          const text = [o.id, o.customerName, o.type, o.size, o.material, o.currentStepName, (o._claim && o._claim.stepName) || '', (o._claim && o._claim.userName) || ''].join(' ')
+          return text.includes(keyword)
+        })
+      }
+    } else {
+      filteredOrders = this._buildFiltered(orders)
+    }
+    this.setData({ filteredOrders, hasMore: isClaimView ? false : this.data.hasMore })
+  },
+
+  /**
    * 触底加载下一页（配合后端分页，避免超过 100 条丢单）
    */
   async loadMore() {
-    const { hasMore, loadingMore, pageSize } = this.data
+    const { hasMore, loadingMore, pageSize, activeCategory } = this.data
+    // 认领视图不分页（流水上限 200 条）
+    if (activeCategory === 'claimedActive' || activeCategory === 'claimedDone') return
     if (!hasMore || loadingMore) return
     this.setData({ loadingMore: true })
     try {
@@ -98,9 +153,9 @@ Page({
       this.setData({
         page: nextPage,
         orders: merged,
-        filteredOrders: this._buildFiltered(merged),
         hasMore: (batch || []).length >= pageSize
       })
+      this._rebuildView()
     } catch (e) {
       ui.toast('加载更多失败，请稍后重试', 'none')
     } finally {
@@ -167,7 +222,7 @@ Page({
   },
 
   _applyCurrentFilter() {
-    this.setData({ filteredOrders: this._buildFiltered(this.data.orders) })
+    this._rebuildView()
   },
 
   applyFilter(keyword, orders, activeCategory = 'all') {
@@ -486,6 +541,29 @@ Page({
     if (this.data.selectMode) return
     const { id } = event.currentTarget.dataset
     wx.navigateTo({ url: `/pages/order-detail/index?id=${id}` })
+  },
+
+  /** 管理员就地撤销进行中的认领（换人推进当前工序） */
+  async revokeClaim(event) {
+    const id = event.currentTarget.dataset.id
+    const claim = (this.data.claims || []).find(c => c.status === 'active' && c.orderId === id)
+    if (!claim) return
+    const ok = await ui.confirm(
+      `确定撤销「${claim.userName}」对「${claim.stepName}」的认领吗？撤销后其他员工可重新认领该工序。`,
+      '撤销认领',
+      { confirmColor: '#b91c1c', modalTimeout: 4000, fallbackOnTimeout: true }
+    )
+    if (!ok) return
+    try {
+      ui.showLoading('撤销中...')
+      await api.releaseClaim(id)
+      ui.hideLoading()
+      ui.toast('已撤销认领', 'success')
+      await this.refresh()
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '撤销认领失败')
+    }
   },
 
   goToHome() {

@@ -434,12 +434,25 @@ async function revertStep(orderId, stepKey, stepIndex, user) {
       status: newStatus,
       paused: newPaused,
       completedDate: newCompletedDate,
+      // 撤回会改变当前工序（或回退到已完成的工序），进行中的认领随之失效 → 释放
+      ...(order.activeClaim ? { activeClaim: null } : {}),
       updatedAt: db.serverDate()
     }
   })
 
   if (updateResult.stats.updated === 0) {
     throw new Error('该工序状态已变更，请刷新后重试')
+  }
+
+  // 撤回成功 → 归档被释放的认领流水（reason: revert），员工可重新认领
+  if (order.activeClaim) {
+    await _archiveClaim(order.activeClaim, {
+      status: 'released',
+      releasedAt: formatTime(),
+      releasedBy: user.name,
+      releasedById: user._id,
+      reason: 'revert'
+    })
   }
 
   // 乐观锁成功 → 才执行库存回退（支持多个规格分批回退）
@@ -604,12 +617,25 @@ async function updateStepKeys(orderId, newStepKeys, user) {
       paused: newPaused,
       completedDate: newCompletedDate,
       history: newHistory,
+      // 工序重排后认领绑定的工序下标失效 → 释放进行中的认领
+      ...(order.activeClaim ? { activeClaim: null } : {}),
       updatedAt: db.serverDate()
     }
   })
 
   if (updateResult.stats.updated === 0) {
     throw new Error('工单状态已变更，请刷新后重试')
+  }
+
+  // 归档被释放的认领流水（reason: stepKeys）
+  if (order.activeClaim) {
+    await _archiveClaim(order.activeClaim, {
+      status: 'released',
+      releasedAt: formatTime(),
+      releasedBy: user.name,
+      releasedById: user._id,
+      reason: 'stepKeys'
+    })
   }
 
   // 乐观锁成功 → 才执行库存回退（与 revertStep 一致）
@@ -1288,6 +1314,263 @@ async function deleteProcessTemplate(templateId, user) {
   return { deleted: true, templateId }
 }
 
+// ===================== 工单认领 =====================
+//
+// 设计要点：
+//   - 认领信息双写：
+//       1) 订单文档上的 activeClaim（单据级快照：列表/详情展示 + 原子约束 + 完成校验）
+//       2) order_claims 集合（认领流水，status: active/completed/released）
+//     「我的工单」与管理员认领视图从 order_claims 查询；工单卡片上的认领人从 activeClaim 读
+//   - 同一工单同一时刻至多一个进行中的认领：写入用 _.or 原子条件（activeClaim 缺失或为 null
+//     且 currentStepIndex 未变），两个员工同时抢认领时数据库层面保证只有一人成功
+//   - 认领绑定工序下标：完成并流转后该认领自动归档为 completed；撤回工序/修改工序配置
+//     会释放进行中的认领（released），需要时员工重新认领
+//   - 权限：员工岗位必须匹配当前工序 station；管理员不受限；认领人本人与管理员可撤销
+
+// 归档认领流水（completed / released）。失败不影响主流程（认领以订单上的 activeClaim 为准）
+async function _archiveClaim(claim, patch) {
+  if (!claim || !claim.claimId) return
+  try {
+    await db.collection('order_claims').where({
+      claimId: claim.claimId,
+      status: 'active'
+    }).update({
+      data: {
+        status: patch.status,
+        ...(patch.completedAt ? { completedAt: patch.completedAt } : {}),
+        ...(patch.releasedAt ? { releasedAt: patch.releasedAt } : {}),
+        ...(patch.releasedBy ? { releasedBy: patch.releasedBy } : {}),
+        ...(patch.releasedById ? { releasedById: patch.releasedById } : {}),
+        ...(patch.reason ? { reason: patch.reason } : {})
+      }
+    })
+  } catch (e) { /* 非关键 */ }
+}
+
+/**
+ * 确保 order_claims 集合存在（冷启动后首次认领时自动建，已存在则忽略报错）
+ * 控制台手动建过就不依赖这里；没建过也不会再报 -502005 collection not exists
+ */
+let _claimsCollectionEnsured = false
+async function _ensureClaimsCollection() {
+  if (_claimsCollectionEnsured) return
+  try {
+    await db.createCollection('order_claims')
+  } catch (e) { /* 集合已存在或环境不支持，忽略 */ }
+  _claimsCollectionEnsured = true
+}
+
+/**
+ * 认领工单当前工序
+ * 幂等：本人已认领当前工序时重复调用直接成功；
+ * 冲突：已被他人认领时报错；原子条件防止并发抢认领
+ */
+async function claimOrder(orderId, user) {
+  if (!user) throw new Error('用户不存在')
+  if (user.status !== 'active') throw new Error('账号未启用')
+  if (!orderId) throw new Error('缺少工单ID')
+
+  const res = await db.collection('orders').where({ id: orderId }).get()
+  if (res.data.length === 0) throw new Error('工单不存在')
+  const order = res.data[0]
+  if (order.status === 'completed') throw new Error('工单已完工，无需认领')
+
+  const isAdmin = user.role === 'admin' || user.role === 'superadmin'
+  if (order.paused && !isAdmin) throw new Error('工单已暂停，仅管理员可操作')
+
+  const steps = buildSteps(order.stepKeys)
+  const curIdx = Number(order.currentStepIndex) || 0
+  const curStep = steps[curIdx]
+  if (!curStep) throw new Error('工单工序已全部完成，无需认领')
+
+  const existing = order.activeClaim || null
+  // 幂等：本人已认领当前工序 → 重复点击无害，直接成功
+  if (existing && existing.userId === user._id && Number(existing.stepIndex) === curIdx) {
+    return { alreadyClaimed: true, claim: existing, order: await getOrder(orderId) }
+  }
+  if (existing && existing.userId !== user._id) {
+    throw new Error(`该工序已被「${existing.userName || '其他员工'}」认领，需等其完成流转，或由管理员撤销认领`)
+  }
+  // 异常兜底：本人认领的是旧工序（数据不一致时可能出现）→ 先归档旧认领再重新认领
+  if (existing && existing.userId === user._id) {
+    await _archiveClaim(existing, { status: 'released', releasedAt: formatTime(), releasedBy: user.name, releasedById: user._id, reason: 'stale' })
+  }
+
+  // 岗位校验：员工岗位必须包含当前工序 station，管理员放行
+  if (!isAdmin) {
+    const stations = Array.isArray(user.stations) ? user.stations : (user.station ? [user.station] : [])
+    if (!stations.includes(curStep.station)) {
+      throw new Error(`当前工序仅限${curStep.station}或管理员认领`)
+    }
+  }
+
+  const claim = {
+    claimId: `C_${orderId}_${curIdx}_${Date.now()}`,
+    userId: user._id,
+    userName: user.name,
+    stepIndex: curIdx,
+    stepKey: curStep.key,
+    stepName: curStep.name,
+    claimedAt: formatTime()
+  }
+
+  // 原子认领：仅当 currentStepIndex 未变且无人认领（activeClaim 缺失或为 null）时才写入
+  const lockBase = { _id: order._id, currentStepIndex: curIdx }
+  const claimFreeCond = _.or([
+    { ...lockBase, activeClaim: _.exists(false) },
+    { ...lockBase, activeClaim: _.eq(null) }
+  ])
+  const upd = await db.collection('orders').where(claimFreeCond).update({
+    // 【坑】update 传普通对象会被 SDK 拆成点路径合并更新（activeClaim.claimId...），
+    // 目标字段 activeClaim 为 null 时报 "Cannot create field in element {activeClaim: null}"。
+    // 必须用 _.set 整体替换，null 也能写入。
+    data: { activeClaim: _.set(claim), updatedAt: db.serverDate() }
+  })
+  if (upd.stats.updated === 0) {
+    throw new Error('认领失败：工单状态已变更或刚被他人认领，请刷新后重试')
+  }
+
+  try {
+    await _ensureClaimsCollection()
+    await db.collection('order_claims').add({
+      data: { orderId, ...claim, status: 'active', createdAt: db.serverDate() }
+    })
+  } catch (e) { /* 流水写失败不影响认领结果 */ }
+
+  try {
+    await db.collection('audit_logs').add({
+      data: { action: '认领工单', targetId: orderId, targetName: curStep.name, operatorId: user._id, operatorName: user.name, createdAt: db.serverDate() }
+    })
+  } catch (e) { /* 非关键 */ }
+
+  return { alreadyClaimed: false, claim, order: await getOrder(orderId) }
+}
+
+/**
+ * 撤销认领：认领人本人可取消自己的认领；管理员可撤销任何人的认领（换人推进）
+ */
+async function releaseClaim(orderId, user) {
+  if (!user) throw new Error('用户不存在')
+  if (user.status !== 'active') throw new Error('账号未启用')
+  if (!orderId) throw new Error('缺少工单ID')
+
+  const res = await db.collection('orders').where({ id: orderId }).get()
+  if (res.data.length === 0) throw new Error('工单不存在')
+  const order = res.data[0]
+  const claim = order.activeClaim
+  if (!claim) throw new Error('该工单当前没有进行中的认领')
+
+  const isAdmin = user.role === 'admin' || user.role === 'superadmin'
+  if (!isAdmin && claim.userId !== user._id) {
+    throw new Error('仅认领人本人或管理员可撤销认领')
+  }
+  const reason = isAdmin && claim.userId !== user._id ? 'admin_revoke' : 'self_cancel'
+  await _releaseActiveClaim(order, user, reason)
+
+  try {
+    await db.collection('audit_logs').add({
+      data: {
+        action: '撤销认领',
+        targetId: orderId,
+        targetName: claim.stepName || '',
+        operatorId: user._id,
+        operatorName: user.name,
+        detail: { claimUserId: claim.userId, claimUserName: claim.userName, reason },
+        createdAt: db.serverDate()
+      }
+    })
+  } catch (e) { /* 非关键 */ }
+
+  return { released: true, order: await getOrder(orderId) }
+}
+
+// 释放工单上的进行中认领（清 activeClaim + 归档流水），供撤销认领调用
+async function _releaseActiveClaim(order, user, reason) {
+  const claim = order.activeClaim
+  if (!claim) return false
+  // 条件更新：claimId 未被并发改过才清空，防止误删他人的新认领
+  const upd = await db.collection('orders').where({
+    _id: order._id,
+    'activeClaim.claimId': claim.claimId
+  }).update({ data: { activeClaim: null, updatedAt: db.serverDate() } })
+  await _archiveClaim(claim, {
+    status: 'released',
+    releasedAt: formatTime(),
+    releasedBy: user ? user.name : '',
+    releasedById: user ? user._id : '',
+    reason: reason || ''
+  })
+  return upd.stats.updated > 0
+}
+
+/**
+ * 认领列表
+ * @param {string} scope 'my' 本人全部认领 | 'all' 全员认领（仅管理员）
+ * @param {string[]} statuses 默认 ['active','completed']；released（被撤销）默认不展示
+ * 返回的每条认领带 order 工单概要（状态标签/当前工序等派生字段已就绪）
+ */
+async function listClaims(scope, statuses, user) {
+  if (!user) throw new Error('用户不存在')
+  const wantAll = scope === 'all'
+  if (wantAll) requireAdmin(user)
+  const statusList = (Array.isArray(statuses) && statuses.length > 0)
+    ? statuses.filter(s => ['active', 'completed', 'released'].includes(s))
+    : ['active', 'completed']
+  if (statusList.length === 0) return []
+
+  const where = wantAll
+    ? { status: _.in(statusList) }
+    : { userId: user._id, status: _.in(statusList) }
+
+  let claims = []
+  try {
+    const res = await db.collection('order_claims')
+      .where(where)
+      .orderBy('claimedAt', 'desc')
+      .limit(200)
+      .get()
+    claims = res.data || []
+  } catch (err) {
+    if (err.errCode === -502005) return []
+    throw err
+  }
+  if (claims.length === 0) return []
+
+  // 联查工单概要（enrichOrder 补状态标签/当前工序/进度等派生字段）
+  const orderIds = [...new Set(claims.map(c => c.orderId).filter(Boolean))]
+  const orderMap = {}
+  const PAGE = 100
+  for (let i = 0; i < orderIds.length; i += PAGE) {
+    const batch = orderIds.slice(i, i + PAGE)
+    const res = await db.collection('orders').where({ id: _.in(batch) }).get()
+    for (const o of res.data || []) orderMap[o.id] = enrichOrder(o)
+  }
+
+  return claims.map(c => {
+    const o = orderMap[c.orderId]
+    return {
+      ...c,
+      order: o ? {
+        id: o.id,
+        customerName: o.customerName || '',
+        type: o.type || '',
+        size: o.size || '',
+        qty: o.qty || 0,
+        material: o.material || '',
+        dueDate: o.dueDate || '',
+        urgent: !!o.urgent,
+        statusLabel: o.statusLabel || '',
+        category: o.category || '',
+        currentStepName: o.currentStepName || '',
+        currentStation: o.currentStation || '',
+        progress: o.progress || 0,
+        activeClaim: o.activeClaim || null,
+        completedDate: o.completedDate || null
+      } : null
+    }
+  })
+}
+
 exports.main = async (event, context) => {
   const wxContext = cloud.getWXContext()
   const openid = wxContext.OPENID
@@ -1364,6 +1647,17 @@ exports.main = async (event, context) => {
       case 'drawingUrls':
         // 服务端解析图纸临时链接（管理员权限，不受客户端存储安全规则限制）
         return resolveDrawingUrls(event.fileIDs)
+
+      case 'claimOrder':
+        if (!event.orderId) return { success: false, error: '缺少工单ID' }
+        return { success: true, ...(await claimOrder(event.orderId, user)) }
+
+      case 'releaseClaim':
+        if (!event.orderId) return { success: false, error: '缺少工单ID' }
+        return { success: true, ...(await releaseClaim(event.orderId, user)) }
+
+      case 'listClaims':
+        return { success: true, claims: await listClaims(event.scope, event.statuses, user) }
 
       case 'listLogs':
         return { success: true, logs: await listLogs(event.days) }

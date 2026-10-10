@@ -16,6 +16,7 @@
       <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn primary" bindtap="goMaterial">材料库存</button>
       <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn primary" bindtap="toggleEmpModal">员工管理</button>
       <button class="action-btn primary" bindtap="goScan">扫码进单</button>
+      <button class="action-btn ghost" bindtap="goMyOrders">我的工单</button>
       <button class="action-btn ghost" bindtap="goOrders">查看工单</button>
       <button class="action-btn ghost" bindtap="goProfile">个人中心</button>
     </view>

@@ -103,6 +103,24 @@ function formatTime() {
   return `${china.getUTCFullYear()}-${pad(china.getUTCMonth() + 1)}-${pad(china.getUTCDate())} ${pad(china.getUTCHours())}:${pad(china.getUTCMinutes())}`
 }
 
+// 归档认领流水（与 orderManager._archiveClaim 同逻辑；本函数独立部署，需自带一份）
+async function _archiveClaim(claim, patch) {
+  if (!claim || !claim.claimId) return
+  try {
+    await db.collection('order_claims').where({
+      claimId: claim.claimId,
+      status: 'active'
+    }).update({
+      data: {
+        status: patch.status,
+        ...(patch.completedAt ? { completedAt: patch.completedAt } : {}),
+        ...(patch.releasedAt ? { releasedAt: patch.releasedAt } : {}),
+        ...(patch.reason ? { reason: patch.reason } : {})
+      }
+    })
+  } catch (e) { /* 非关键 */ }
+}
+
 exports.main = async (event, context) => {
   const wxContext = cloud.getWXContext()
   const openid = wxContext.OPENID
@@ -177,11 +195,17 @@ exports.main = async (event, context) => {
           status: 'completed',
           completedDate: formatTime(),
           history: finalHistory,
+          // 兜底：完工时清掉可能残留的进行中认领
+          ...(order.activeClaim ? { activeClaim: null } : {}),
           updatedAt: db.serverDate()
         }
       })
       if (lockUpdate.stats.updated === 0) {
         return { success: false, error: '该工单已被处理，请刷新后重试' }
+      }
+      // 归档残留认领流水
+      if (order.activeClaim) {
+        await _archiveClaim(order.activeClaim, { status: 'completed', completedAt: formatTime() })
       }
       // 记录审计日志
       try {
@@ -205,6 +229,17 @@ exports.main = async (event, context) => {
       // 构建 steps 数组供前端使用（自动完工情况）
       const finalSteps = buildSteps(order.stepKeys)
       return { success: true, order: { ...order, stepKeys: oldStepKeys, steps: finalSteps, currentStepName: '已完成', currentStation: '入库完成', status: 'completed', completedDate: formatTime(), history: finalHistory } }
+    }
+
+    // ===== 认领校验：工序已被认领时，仅认领人本人或管理员可完成 =====
+    // 认领绑定当前工序下标；管理员代操作（operatorId=他人）仍然放行
+    const activeClaim = order.activeClaim || null
+    const claimActive = !!(activeClaim && Number(activeClaim.stepIndex) === curIdx)
+    if (claimActive && !isAdmin && activeClaim.userId !== user._id) {
+      return {
+        success: false,
+        error: `该工序已被「${activeClaim.userName || '其他员工'}」认领，需等其完成流转，或由管理员撤销认领`
+      }
     }
 
     // ===== 配合人员校验（敦压 / 拉尾子 / 精车 / 铣方头 = 编程员；打字 = 调字员）=====
@@ -387,6 +422,9 @@ exports.main = async (event, context) => {
         paused: newPaused,
         completedDate: isCompleted ? formatTime() : null,
         history: newHistory,
+        // 认领联动：本工序完成流转后清掉进行中认领（流水归档为 completed，
+        // 在认领人的「我的工单」里自动移到已完成）
+        ...(claimActive ? { activeClaim: null } : {}),
         updatedAt: db.serverDate()
       }
     })
@@ -433,6 +471,10 @@ exports.main = async (event, context) => {
                 status: order.status,
                 completedDate: order.completedDate || null,
                 history: order.history || [],
+                // 回滚时还原进行中认领（认领随本工序完成被清掉，失败需还原）
+                // 【坑】目标字段此时刚被主更新置为 null，普通对象写入会报
+                // "Cannot create field in element {activeClaim: null}"，必须 _.set 整体替换
+                activeClaim: order.activeClaim ? db.command.set(order.activeClaim) : null,
                 updatedAt: db.serverDate()
               }
             })
@@ -474,6 +516,10 @@ exports.main = async (event, context) => {
               status: order.status,
               completedDate: order.completedDate || null,
               history: order.history || [],
+              // 回滚时还原进行中认领（认领随本工序完成被清掉，失败需还原）
+              // 【坑】目标字段此时刚被主更新置为 null，普通对象写入会报
+              // "Cannot create field in element {activeClaim: null}"，必须 _.set 整体替换
+              activeClaim: order.activeClaim ? db.command.set(order.activeClaim) : null,
               updatedAt: db.serverDate()
             }
           })
@@ -482,6 +528,11 @@ exports.main = async (event, context) => {
         }
         return { success: false, error: `库存扣减失败: ${err.message}，工序已回滚，请重试` }
       }
+    }
+
+    // 认领流水归档为已完成（放在库存扣减成功之后：库存失败回滚时认领仍是进行中）
+    if (claimActive) {
+      await _archiveClaim(activeClaim, { status: 'completed', completedAt: formatTime() })
     }
 
     // 审计日志（记录实际工序操作员，非提交人）
@@ -523,6 +574,8 @@ exports.main = async (event, context) => {
       paused: newPaused,
       completedDate: isCompleted ? formatTime() : null,
       history: newHistory,
+      // 认领联动：本工序完成后认领已被清空（回滚场景不会走到这里），返回值与库内一致
+      activeClaim: claimActive ? null : (order.activeClaim || null),
       // 补充前端展示需要的派生字段（保持与 orderManager.enrichOrder 一致）
       progress: updatedSteps.length > 0 ? Math.min(Math.round((newStepIndex / updatedSteps.length) * 100), 100) : 0,
       overdue: order.dueDate ? isOverdueAfter({ ...order, status: newStatus }) : false

@@ -281,6 +281,35 @@
 
   <view class="section card action-panel">
     <view class="section-title">操作面板</view>
+
+    <!-- 认领区块：仅未完工工单显示 -->
+    <view wx:if="{{order.status !== 'completed'}}" class="claim-section">
+      <!-- 我已认领 -->
+      <view wx:if="{{claimState === 'mine'}}" class="claim-bar mine">
+        <view class="claim-info">
+          <text class="claim-main">✓ 我已认领「{{order.activeClaim.stepName}}」</text>
+          <text class="claim-sub">完成并流转后自动移入「我的工单 · 已完成」</text>
+        </view>
+        <button size="mini" class="claim-mini-btn" bindtap="releaseCurrentClaim" loading="{{claimBtnLoading}}">取消认领</button>
+      </view>
+      <!-- 他人认领中 -->
+      <view wx:elif="{{claimState === 'other'}}" class="claim-bar other">
+        <view class="claim-info">
+          <text class="claim-main">{{order.activeClaim.userName}} 已认领「{{order.activeClaim.stepName}}」</text>
+          <text class="claim-sub">其完成流转前，其他员工不能认领该工序</text>
+        </view>
+        <button wx:if="{{isAdmin}}" size="mini" class="claim-mini-btn warn" bindtap="releaseCurrentClaim" loading="{{claimBtnLoading}}">撤销认领</button>
+      </view>
+      <!-- 无人认领 & 我可认领 -->
+      <view wx:elif="{{canClaim}}" class="claim-bar free">
+        <view class="claim-info">
+          <text class="claim-main">当前工序：{{currentStepName}} · {{currentStepStation}}</text>
+          <text class="claim-sub">认领后进入「我的工单」，其他员工需等您完成流转</text>
+        </view>
+        <button size="mini" class="claim-mini-btn primary" bindtap="claimCurrentStep" loading="{{claimBtnLoading}}">认领此工单</button>
+      </view>
+    </view>
+
     <view wx:if="{{canComplete}}" class="subtle admin-tip">{{isAdmin ? '管理员可直接点击已完成，系统会自动流转到下一工序。' : '当前工序已分配给您，请确认完成后点击流转。'}}</view>
     <view wx:elif="{{order.status !== 'completed'}}" class="subtle no-permission-tip">您无权操作当前工序，请等待{{order.currentStation}}处理。</view>
 

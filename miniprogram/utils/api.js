@@ -412,6 +412,24 @@ async function toggleOrderUrgent(orderId, urgent) {
   clearCache()
   return callFunction('orderManager', { action: 'toggleUrgent', orderId, urgent })
 }
+// ===== 工单认领 =====
+// 认领当前工序（员工岗位须匹配当前工序，管理员不受限；幂等，重复调用无害）
+async function claimOrder(orderId) {
+  clearCache()
+  return callFunction('orderManager', { action: 'claimOrder', orderId })
+}
+// 撤销认领（认领人本人或管理员）
+async function releaseClaim(orderId) {
+  clearCache()
+  return callFunction('orderManager', { action: 'releaseClaim', orderId })
+}
+// 认领列表：scope='my' 本人（我的工单）；scope='all' 全员（管理员认领视图）
+// 每条带 order 工单概要（状态标签/当前工序/进度等）
+// 云函数返回 { success, claims }，这里统一拆包成数组，调用方直接 filter/map
+async function listClaims(scope = 'my', statuses) {
+  const res = await callFunction('orderManager', { action: 'listClaims', scope, statuses }, { cache: true })
+  return Array.isArray(res && res.claims) ? res.claims : []
+}
 /**
  * 撤回已完成工序
  * @param {string} orderId
@@ -790,6 +808,9 @@ module.exports = {
   completeCurrentStep,
   togglePause,
   toggleOrderUrgent,
+  claimOrder,
+  releaseClaim,
+  listClaims,
   revertCompletedStep,
   updateOrderStepKeys,
   updateOrderDrawings,

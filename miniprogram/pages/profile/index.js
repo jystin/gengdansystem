@@ -86,6 +86,7 @@ Page({
   },
 
   goOrders() { wx.navigateTo({ url: '/pages/orders/index' }) },
+  goMyOrders() { wx.navigateTo({ url: '/pages/my-orders/index' }) },
   goToHome() { wx.reLaunch({ url: '/pages/home/index' }) },
   goScan() { wx.navigateTo({ url: '/pages/scan/index' }) },
   goAdmin() {

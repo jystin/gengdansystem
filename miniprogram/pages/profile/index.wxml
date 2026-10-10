@@ -60,6 +60,7 @@
 
     <view class="profile-actions">
       <button class="action-btn primary" bindtap="goScan">扫码进单</button>
+      <button class="action-btn ghost" bindtap="goMyOrders">我的工单</button>
       <button class="action-btn ghost" bindtap="goOrders">查看工单</button>
     </view>
 

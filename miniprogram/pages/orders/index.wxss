@@ -442,3 +442,68 @@
   color: #1e293b;
   background: #f8fafc;
 }
+
+/* ===== 工单认领（管理员视图 + 普通列表认领提示）===== */
+.claim-hint {
+  margin-top: 6rpx;
+  color: #b45309;
+}
+
+.claim-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-top: 12rpx;
+  padding-top: 12rpx;
+  border-top: 1rpx dashed #e2e8f0;
+}
+
+.claim-chip {
+  flex-shrink: 0;
+  padding: 2rpx 12rpx;
+  border-radius: 999rpx;
+  font-size: 20rpx;
+  line-height: 30rpx;
+}
+
+.chip-active {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.chip-done {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.chip-stale {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.claim-person {
+  flex: 1;
+  min-width: 0;
+  font-size: 24rpx;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claim-when {
+  flex-shrink: 0;
+  font-size: 22rpx;
+  color: #94a3b8;
+}
+
+.claim-revoke-btn {
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 22rpx;
+  line-height: 2;
+  padding: 0 20rpx;
+  border-radius: 999rpx;
+  background: #fee2e2;
+  color: #b91c1c;
+}

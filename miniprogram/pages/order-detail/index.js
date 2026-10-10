@@ -107,6 +107,11 @@ Page({
     isLoadingMore: false,
     // 小程序码重新生成状态
     qrRegenerating: false,
+    // ===== 工单认领 =====
+    // claimState: 'none' 无人认领 | 'mine' 我认领的 | 'other' 他人认领的
+    claimState: 'none',
+    canClaim: false,
+    claimBtnLoading: false,
     // ===== 编辑工单字段 =====
     editingFields: false,
     editFieldsDraft: {}, // 顶层字段
@@ -701,6 +706,13 @@ Page({
     }
     const repeatTotalChoice = Math.min(Math.max(totalNow, seq), maxRepeat)
 
+    // ===== 工单认领状态 =====
+    // activeClaim 存在于订单文档上；mine/other 按认领人判定；
+    // canClaim = 未完工 + 有当前工序 + （管理员或岗位匹配）+ 无人认领
+    const activeClaim = order.activeClaim || null
+    const claimState = !activeClaim ? 'none' : (activeClaim.userId === (user.id || '') ? 'mine' : 'other')
+    const canClaim = canComplete && claimState === 'none'
+
     return {
       isAdmin, canComplete, isBlankingStep, autoLength,
       isProgrammerStep, isRepeatableStep, repeatOptions, repeatTotalChoice,
@@ -709,7 +721,8 @@ Page({
       currentStepKey: currentStep ? currentStep.key : '',
       currentStepStation: currentStep ? (currentStep.station || '') : '',
       currentStepName: currentStep ? (currentStep.name || '') : '',
-      currentStepIndex: Number(order.currentStepIndex) || 0
+      currentStepIndex: Number(order.currentStepIndex) || 0,
+      claimState, canClaim
     }
   },
 
@@ -727,6 +740,8 @@ Page({
       isRepeatableStep: acc.isRepeatableStep,
       repeatOptions: acc.repeatOptions,
       repeatTotalChoice: acc.repeatTotalChoice,
+      claimState: acc.claimState,
+      canClaim: acc.canClaim,
       // 工序变了 → 操作员候选池随之变化，非法选择自动回退（管理员全程有效，选择被保留）
       ...this._operatorPoolPatch(acc)
     }
@@ -944,6 +959,56 @@ Page({
       ui.toast(order.urgent ? '已设为加急' : '已取消加急', 'success')
     } catch (e) {
       ui.handleError(e, '操作失败')
+    }
+  },
+
+  // ===== 工单认领 =====
+
+  /** 认领当前工序：后端校验岗位匹配/无人认领，幂等可重复点击 */
+  async claimCurrentStep() {
+    if (this.data.claimBtnLoading) return
+    this.setData({ claimBtnLoading: true })
+    try {
+      ui.showLoading('认领中...')
+      await api.claimOrder(this.orderId)
+      ui.hideLoading()
+      ui.toast('认领成功，已加入「我的工单」', 'success')
+      await this.refresh({ force: true })
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '认领失败')
+    } finally {
+      this.setData({ claimBtnLoading: false })
+    }
+  },
+
+  /** 取消/撤销认领：本人可取消自己的认领；管理员可撤销任何人的认领（换人推进） */
+  async releaseCurrentClaim() {
+    const claim = (this.data.order && this.data.order.activeClaim) || null
+    if (!claim) return
+    const me = getApp().globalData.currentUser || {}
+    const isSelf = claim.userId === me.id
+    const ok = await ui.confirm(
+      isSelf
+        ? `确定取消认领「${claim.stepName}」吗？取消后其他员工可重新认领该工序。`
+        : `确定撤销「${claim.userName}」对「${claim.stepName}」的认领吗？撤销后其他员工可重新认领该工序。`,
+      isSelf ? '取消认领' : '撤销认领',
+      { confirmColor: '#b45309', modalTimeout: 4000, fallbackOnTimeout: true }
+    )
+    if (!ok) return
+    if (this.data.claimBtnLoading) return
+    this.setData({ claimBtnLoading: true })
+    try {
+      ui.showLoading('处理中...')
+      await api.releaseClaim(this.orderId)
+      ui.hideLoading()
+      ui.toast(isSelf ? '已取消认领' : '已撤销认领', 'success')
+      await this.refresh({ force: true })
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '撤销认领失败')
+    } finally {
+      this.setData({ claimBtnLoading: false })
     }
   },
 
