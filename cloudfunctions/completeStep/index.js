@@ -103,6 +103,26 @@ function formatTime() {
   return `${china.getUTCFullYear()}-${pad(china.getUTCMonth() + 1)}-${pad(china.getUTCDate())} ${pad(china.getUTCHours())}:${pad(china.getUTCMinutes())}`
 }
 
+/**
+ * 归一化认领映射：{ [stepIndex]: claim }（与 orderManager._normalizeStepClaims 同逻辑；
+ * 本函数独立部署，需自带一份）
+ * 兼容旧单认领模型（activeClaim 单字段）：legacy 认领并入映射；stepClaims 值为 null 时跳过
+ */
+function _normalizeStepClaims(order) {
+  const map = {}
+  const legacy = order && order.activeClaim
+  if (legacy && legacy.stepIndex !== undefined && legacy.stepIndex !== null) {
+    map[Number(legacy.stepIndex)] = legacy
+  }
+  const sc = order && order.stepClaims
+  if (sc && typeof sc === 'object') {
+    for (const k of Object.keys(sc)) {
+      if (sc[k]) map[Number(k)] = sc[k]
+    }
+  }
+  return map
+}
+
 // 归档认领流水（与 orderManager._archiveClaim 同逻辑；本函数独立部署，需自带一份）
 async function _archiveClaim(claim, patch) {
   if (!claim || !claim.claimId) return
@@ -115,7 +135,11 @@ async function _archiveClaim(claim, patch) {
         status: patch.status,
         ...(patch.completedAt ? { completedAt: patch.completedAt } : {}),
         ...(patch.releasedAt ? { releasedAt: patch.releasedAt } : {}),
-        ...(patch.reason ? { reason: patch.reason } : {})
+        ...(patch.reason ? { reason: patch.reason } : {}),
+        // 跨认领完成时记录实际操作人（认领人 ≠ 提交人，供「我的工单」展示）
+        ...(patch.completedByName ? { completedByName: patch.completedByName } : {}),
+        ...(patch.completedByRole ? { completedByRole: patch.completedByRole } : {}),
+        ...(patch.completedById ? { completedById: patch.completedById } : {})
       }
     })
   } catch (e) { /* 非关键 */ }
@@ -187,6 +211,8 @@ exports.main = async (event, context) => {
         materialConsumption: null
       }
       const finalHistory = [...(order.history || []), completeHistoryEntry]
+      // 完工时清掉所有进行中认领（按工序认领映射整体清空 + 旧模型字段兜底）
+      const leftoverClaims = _normalizeStepClaims(order)
       const lockUpdate = await db.collection('orders').where({
         _id: order._id,
         status: 'processing' // 修复：仅当状态还是 processing 时才置为 completed，防止并发重复完工
@@ -195,7 +221,7 @@ exports.main = async (event, context) => {
           status: 'completed',
           completedDate: formatTime(),
           history: finalHistory,
-          // 兜底：完工时清掉可能残留的进行中认领
+          stepClaims: db.command.set({}),
           ...(order.activeClaim ? { activeClaim: null } : {}),
           updatedAt: db.serverDate()
         }
@@ -203,9 +229,18 @@ exports.main = async (event, context) => {
       if (lockUpdate.stats.updated === 0) {
         return { success: false, error: '该工单已被处理，请刷新后重试' }
       }
-      // 归档残留认领流水
-      if (order.activeClaim) {
-        await _archiveClaim(order.activeClaim, { status: 'completed', completedAt: formatTime() })
+      // 归档残留认领流水（跨认领完成时同样记录实际操作人）
+      for (const c of Object.values(leftoverClaims)) {
+        const proxyDone = c.userId !== user._id
+        await _archiveClaim(c, {
+          status: 'completed',
+          completedAt: formatTime(),
+          ...(proxyDone ? {
+            completedByName: user.name,
+            completedByRole: isAdmin ? '管理员' : '流转工',
+            completedById: user._id
+          } : {})
+        })
       }
       // 记录审计日志
       try {
@@ -228,14 +263,18 @@ exports.main = async (event, context) => {
       } catch (e) { /* 非关键 */ }
       // 构建 steps 数组供前端使用（自动完工情况）
       const finalSteps = buildSteps(order.stepKeys)
-      return { success: true, order: { ...order, stepKeys: oldStepKeys, steps: finalSteps, currentStepName: '已完成', currentStation: '入库完成', status: 'completed', completedDate: formatTime(), history: finalHistory } }
+      return { success: true, order: { ...order, stepKeys: oldStepKeys, steps: finalSteps, currentStepName: '已完成', currentStation: '入库完成', status: 'completed', completedDate: formatTime(), history: finalHistory, activeClaim: null, stepClaims: {} } }
     }
 
-    // ===== 认领校验：工序已被认领时，仅认领人本人或管理员可完成 =====
-    // 认领绑定当前工序下标；管理员代操作（operatorId=他人）仍然放行
-    const activeClaim = order.activeClaim || null
-    const claimActive = !!(activeClaim && Number(activeClaim.stepIndex) === curIdx)
-    if (claimActive && !isAdmin && activeClaim.userId !== user._id) {
+    // ===== 认领校验：工序已被认领时，认领人本人 / 管理员 / 流转工可完成 =====
+    // 认领绑定工序下标（stepClaims 映射，含旧 activeClaim 懒迁移）；
+    // 管理员 / 流转工跨认领完成时，实际操作人记录进认领流水（completedBy*），
+    // 认领人的「我的工单 · 已完成」里会显示由谁完成流转
+    const stepClaimsMap = _normalizeStepClaims(order)
+    const activeClaim = stepClaimsMap[curIdx] || null
+    const claimActive = !!activeClaim
+    const isFloaterUser = (user.stations || []).includes('流转工')
+    if (claimActive && !isAdmin && !isFloaterUser && activeClaim.userId !== user._id) {
       return {
         success: false,
         error: `该工序已被「${activeClaim.userName || '其他员工'}」认领，需等其完成流转，或由管理员撤销认领`
@@ -286,11 +325,12 @@ exports.main = async (event, context) => {
       effectiveProgrammer = programmer
     }
 
-    // 岗位校验：操作员（effectiveOperator）是管理员则不受岗位限制；普通员工必须岗位匹配
+    // 岗位校验：操作员（effectiveOperator）是管理员则不受岗位限制；普通员工必须岗位匹配；
+    // 流转工是特殊工种，可处理任意工序（其余权限与普通员工一致）
     const isOperatorAdmin = effectiveOperator.role === 'admin' || effectiveOperator.role === 'superadmin'
     if (!isOperatorAdmin) {
       const stations = effectiveOperator.stations || []
-      if (!stations.includes(currentStep.station)) {
+      if (!stations.includes(currentStep.station) && !stations.includes('流转工')) {
         return { success: false, error: `当前工序仅允许${currentStep.station}处理` }
       }
     }
@@ -422,9 +462,10 @@ exports.main = async (event, context) => {
         paused: newPaused,
         completedDate: isCompleted ? formatTime() : null,
         history: newHistory,
-        // 认领联动：本工序完成流转后清掉进行中认领（流水归档为 completed，
-        // 在认领人的「我的工单」里自动移到已完成）
-        ...(claimActive ? { activeClaim: null } : {}),
+        // 认领联动：本工序完成流转后清掉该工序的认领（流水归档为 completed，
+        // 在认领人的「我的工单」里自动移到已完成）；其他未来工序的认领保持不变
+        ...(order.activeClaim ? { activeClaim: null } : {}),
+        ...(claimActive ? { [`stepClaims.${curIdx}`]: db.command.remove() } : {}),
         updatedAt: db.serverDate()
       }
     })
@@ -475,6 +516,8 @@ exports.main = async (event, context) => {
                 // 【坑】目标字段此时刚被主更新置为 null，普通对象写入会报
                 // "Cannot create field in element {activeClaim: null}"，必须 _.set 整体替换
                 activeClaim: order.activeClaim ? db.command.set(order.activeClaim) : null,
+                // 还原本工序的按工序认领（无认领时 remove 清理主更新写入的痕迹）
+                [`stepClaims.${curIdx}`]: claimActive ? db.command.set(activeClaim) : db.command.remove(),
                 updatedAt: db.serverDate()
               }
             })
@@ -520,6 +563,8 @@ exports.main = async (event, context) => {
               // 【坑】目标字段此时刚被主更新置为 null，普通对象写入会报
               // "Cannot create field in element {activeClaim: null}"，必须 _.set 整体替换
               activeClaim: order.activeClaim ? db.command.set(order.activeClaim) : null,
+              // 还原本工序的按工序认领（无认领时 remove 清理主更新写入的痕迹）
+              [`stepClaims.${curIdx}`]: claimActive ? db.command.set(activeClaim) : db.command.remove(),
               updatedAt: db.serverDate()
             }
           })
@@ -532,7 +577,17 @@ exports.main = async (event, context) => {
 
     // 认领流水归档为已完成（放在库存扣减成功之后：库存失败回滚时认领仍是进行中）
     if (claimActive) {
-      await _archiveClaim(activeClaim, { status: 'completed', completedAt: formatTime() })
+      // 认领人 ≠ 提交人（管理员/流转工跨认领完成）时记录实际操作人
+      const proxyDone = activeClaim.userId !== user._id
+      await _archiveClaim(activeClaim, {
+        status: 'completed',
+        completedAt: formatTime(),
+        ...(proxyDone ? {
+          completedByName: user.name,
+          completedByRole: isAdmin ? '管理员' : '流转工',
+          completedById: user._id
+        } : {})
+      })
     }
 
     // 审计日志（记录实际工序操作员，非提交人）
@@ -574,8 +629,14 @@ exports.main = async (event, context) => {
       paused: newPaused,
       completedDate: isCompleted ? formatTime() : null,
       history: newHistory,
-      // 认领联动：本工序完成后认领已被清空（回滚场景不会走到这里），返回值与库内一致
+      // 认领联动：本工序完成后该工序认领已被清空（回滚场景不会走到这里），返回值与库内一致；
+      // 其他未来工序的认领保留在 stepClaims 映射中
       activeClaim: claimActive ? null : (order.activeClaim || null),
+      stepClaims: (() => {
+        const m = _normalizeStepClaims(order)
+        if (claimActive) delete m[curIdx]
+        return m
+      })(),
       // 补充前端展示需要的派生字段（保持与 orderManager.enrichOrder 一致）
       progress: updatedSteps.length > 0 ? Math.min(Math.round((newStepIndex / updatedSteps.length) * 100), 100) : 0,
       overdue: order.dueDate ? isOverdueAfter({ ...order, status: newStatus }) : false

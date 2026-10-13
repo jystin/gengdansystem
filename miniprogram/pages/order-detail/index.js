@@ -107,10 +107,13 @@ Page({
     isLoadingMore: false,
     // 小程序码重新生成状态
     qrRegenerating: false,
-    // ===== 工单认领 =====
-    // claimState: 'none' 无人认领 | 'mine' 我认领的 | 'other' 他人认领的
+    // ===== 工单认领（按工序）=====
+    // claimState: 'none' 无人认领 | 'mine' 我认领的 | 'other' 他人认领的（当前工序，操作面板用）
+    // currentClaim: 当前工序的认领对象；stepClaimFlags: 每道工序的认领标志（列表用）
     claimState: 'none',
     canClaim: false,
+    currentClaim: null,
+    stepClaimFlags: [],
     claimBtnLoading: false,
     // ===== 编辑工单字段 =====
     editingFields: false,
@@ -684,7 +687,9 @@ Page({
   _computeAccessState(user, order) {
     const isAdmin = user.role === 'admin' || user.role === 'superadmin'
     const _stations = user.stations || (user.station ? [user.station] : [])
-    const canComplete = order.status !== 'completed' && (isAdmin || _stations.includes(order.currentStation))
+    // 流转工：特殊工种，可填写操作面板并完成流转任意工序（其余权限与普通员工一致）
+    const isFloater = _stations.includes(api.FLOATER_STATION)
+    const canComplete = order.status !== 'completed' && (isAdmin || isFloater || _stations.includes(order.currentStation))
     const currentStep = order.steps && order.steps[order.currentStepIndex]
     const isBlankingStep = currentStep && currentStep.key === 'blanking'
     const autoLength = (isBlankingStep && order.drawingDetail && (order.drawingDetail.blankingLength || order.drawingDetail.length)) ? (order.drawingDetail.blankingLength || order.drawingDetail.length) : ''
@@ -706,15 +711,31 @@ Page({
     }
     const repeatTotalChoice = Math.min(Math.max(totalNow, seq), maxRepeat)
 
-    // ===== 工单认领状态 =====
-    // activeClaim 存在于订单文档上；mine/other 按认领人判定；
-    // canClaim = 未完工 + 有当前工序 + （管理员或岗位匹配）+ 无人认领
-    const activeClaim = order.activeClaim || null
-    const claimState = !activeClaim ? 'none' : (activeClaim.userId === (user.id || '') ? 'mine' : 'other')
+    // ===== 工单认领状态（按工序认领：stepClaims 为 { 工序下标: 认领对象 } 映射）=====
+    // 当前工序的认领决定操作面板的认领条；未来工序的认领在工序流转列表展示
+    const curIdxAcc = Number(order.currentStepIndex) || 0
+    const stepClaims = order.stepClaims || {}
+    const currentClaim = stepClaims[curIdxAcc] || null
+    const claimState = !currentClaim ? 'none' : (currentClaim.userId === (user.id || '') ? 'mine' : 'other')
     const canClaim = canComplete && claimState === 'none'
 
+    // 工序流转列表每行的认领标志（WXML 做不了岗位匹配，这里预算好）
+    const claimAllowed = order.status !== 'completed' && (!order.paused || isAdmin)
+    const stepClaimFlags = (order.steps || []).map((s, i) => {
+      const c = stepClaims[i] || null
+      const st = !c ? 'none' : (c.userId === (user.id || '') ? 'mine' : 'other')
+      return {
+        has: !!c,
+        mine: st === 'mine',
+        userName: c ? c.userName : '',
+        stepName: c ? (c.stepName || s.name) : '',
+        // 未来工序（尚未轮到）才在列表里显示认领按钮；当前工序在操作面板认领
+        canClaim: i > curIdxAcc && !c && claimAllowed && (isAdmin || isFloater || _stations.includes(s.station))
+      }
+    })
+
     return {
-      isAdmin, canComplete, isBlankingStep, autoLength,
+      isAdmin, isFloater, canComplete, isBlankingStep, autoLength,
       isProgrammerStep, isRepeatableStep, repeatOptions, repeatTotalChoice,
       partnerLabel: partner.label,
       partnerKeyword: partner.keyword,
@@ -722,6 +743,7 @@ Page({
       currentStepStation: currentStep ? (currentStep.station || '') : '',
       currentStepName: currentStep ? (currentStep.name || '') : '',
       currentStepIndex: Number(order.currentStepIndex) || 0,
+      currentClaim, stepClaimFlags,
       claimState, canClaim
     }
   },
@@ -730,6 +752,7 @@ Page({
   _stepPatch(acc) {
     return {
       isAdmin: acc.isAdmin,
+      isFloater: acc.isFloater,
       canComplete: acc.canComplete,
       isBlankingStep: acc.isBlankingStep,
       isProgrammerStep: acc.isProgrammerStep,
@@ -742,6 +765,8 @@ Page({
       repeatTotalChoice: acc.repeatTotalChoice,
       claimState: acc.claimState,
       canClaim: acc.canClaim,
+      currentClaim: acc.currentClaim || null,
+      stepClaimFlags: acc.stepClaimFlags || [],
       // 工序变了 → 操作员候选池随之变化，非法选择自动回退（管理员全程有效，选择被保留）
       ...this._operatorPoolPatch(acc)
     }
@@ -962,15 +987,28 @@ Page({
     }
   },
 
-  // ===== 工单认领 =====
+  // ===== 工单认领（按工序）=====
 
   /** 认领当前工序：后端校验岗位匹配/无人认领，幂等可重复点击 */
   async claimCurrentStep() {
+    const idx = Number(this.data.order && this.data.order.currentStepIndex) || 0
+    await this._claimStepAt(idx)
+  },
+
+  /** 认领指定工序（工序流转列表里的未来工序按钮） */
+  async claimStep(event) {
+    const idx = Number(event.currentTarget.dataset.stepIndex)
+    if (!Number.isInteger(idx)) return
+    await this._claimStepAt(idx)
+  },
+
+  /** 按下标认领工序的统一入口 */
+  async _claimStepAt(idx) {
     if (this.data.claimBtnLoading) return
     this.setData({ claimBtnLoading: true })
     try {
       ui.showLoading('认领中...')
-      await api.claimOrder(this.orderId)
+      await api.claimOrder(this.orderId, idx)
       ui.hideLoading()
       ui.toast('认领成功，已加入「我的工单」', 'success')
       await this.refresh({ force: true })
@@ -982,9 +1020,22 @@ Page({
     }
   },
 
-  /** 取消/撤销认领：本人可取消自己的认领；管理员可撤销任何人的认领（换人推进） */
+  /** 取消/撤销当前工序认领：本人可取消自己的认领；管理员可撤销任何人的认领（换人推进） */
   async releaseCurrentClaim() {
-    const claim = (this.data.order && this.data.order.activeClaim) || null
+    const idx = Number(this.data.order && this.data.order.currentStepIndex) || 0
+    await this._releaseStepAt(idx)
+  },
+
+  /** 撤销指定工序的认领（工序流转列表里的撤销按钮） */
+  async releaseStepClaim(event) {
+    const idx = Number(event.currentTarget.dataset.stepIndex)
+    if (!Number.isInteger(idx)) return
+    await this._releaseStepAt(idx)
+  },
+
+  /** 按下标撤销认领的统一入口 */
+  async _releaseStepAt(idx) {
+    const claim = ((this.data.order && this.data.order.stepClaims) || {})[idx] || null
     if (!claim) return
     const me = getApp().globalData.currentUser || {}
     const isSelf = claim.userId === me.id
@@ -1000,7 +1051,7 @@ Page({
     this.setData({ claimBtnLoading: true })
     try {
       ui.showLoading('处理中...')
-      await api.releaseClaim(this.orderId)
+      await api.releaseClaim(this.orderId, idx)
       ui.hideLoading()
       ui.toast(isSelf ? '已取消认领' : '已撤销认领', 'success')
       await this.refresh({ force: true })

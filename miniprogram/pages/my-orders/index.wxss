@@ -164,3 +164,31 @@
   border-radius: 999rpx;
   line-height: 72rpx;
 }
+
+/* ===== 预认领未来工序的状态标签 ===== */
+.claim-waiting {
+  flex-shrink: 0;
+  padding: 2rpx 14rpx;
+  border-radius: 999rpx;
+  font-size: 20rpx;
+  line-height: 32rpx;
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.claim-ready {
+  flex-shrink: 0;
+  padding: 2rpx 14rpx;
+  border-radius: 999rpx;
+  font-size: 20rpx;
+  line-height: 32rpx;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+/* ===== 跨认领完成：显示实际操作人（管理员/流转工代完成） ===== */
+.proxy-line {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #0f766e;
+}

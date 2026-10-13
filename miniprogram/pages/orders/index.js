@@ -118,9 +118,13 @@ Page({
         .filter(c => c.status === wantStatus && c.order)
         .map(c => ({
           ...c.order,
-          // 已被撤销的进行中快照（管理员撤销后 activeClaim 清空，但流水还在 active 状态的边界）
-          // 保守处理：认领中视图只显示订单上 activeClaim 与流水一致的记录
-          _claimStale: wantStatus === 'active' && (!c.order.activeClaim || c.order.activeClaim.userId !== c.userId),
+          // 已被撤销的进行中快照（管理员撤销后 stepClaims 对应键被清除，但流水还在 active 状态的边界）
+          // 保守处理：认领中视图只显示工单 stepClaims 与流水一致的记录
+          _claimStale: wantStatus === 'active' && (() => {
+            const sc = (c.order && c.order.stepClaims) || {}
+            const live = sc[c.stepIndex]
+            return !live || live.userId !== c.userId
+          })(),
           _claim: c,
           _claimTime: String(wantStatus === 'active' ? c.claimedAt : (c.completedAt || c.claimedAt)).slice(0, 16),
           _checked: !!selectedSet[c.orderId]
@@ -189,11 +193,18 @@ Page({
     return this.applyFilter(this.data.keyword, orders, this.data.activeCategory).map((o) => {
       // 未开始工单:可一键删除(没产量/库存影响);后端 categoryLabel 已是互斥正确中文
       const isNotStarted = this._isNotStarted(o)
+      // 按工序认领：一张工单可能同时有多道工序被认领，列表卡片逐条提示
+      const stepClaims = o.stepClaims || {}
+      const claimHints = Object.keys(stepClaims)
+        .map(k => stepClaims[k])
+        .filter(c => c && c.userName)
+        .map(c => ({ userName: c.userName, stepName: c.stepName || '' }))
       return {
         ...o,
         _checked: !!selectedSet[o.id],
         _isNotStarted: isNotStarted,
-        _deletable: o.category === 'completed' || isNotStarted
+        _deletable: o.category === 'completed' || isNotStarted,
+        _claimHints: claimHints
       }
     })
   },
@@ -543,10 +554,13 @@ Page({
     wx.navigateTo({ url: `/pages/order-detail/index?id=${id}` })
   },
 
-  /** 管理员就地撤销进行中的认领（换人推进当前工序） */
+  /** 管理员就地撤销进行中的认领（换人推进该工序） */
   async revokeClaim(event) {
     const id = event.currentTarget.dataset.id
-    const claim = (this.data.claims || []).find(c => c.status === 'active' && c.orderId === id)
+    const stepIndex = Number(event.currentTarget.dataset.stepIndex)
+    // 同一工单可能有多道工序被认领，用 orderId + stepIndex 精确定位
+    const claim = (this.data.claims || []).find(c => c.status === 'active' && c.orderId === id && Number(c.stepIndex) === stepIndex)
+      || (this.data.claims || []).find(c => c.status === 'active' && c.orderId === id)
     if (!claim) return
     const ok = await ui.confirm(
       `确定撤销「${claim.userName}」对「${claim.stepName}」的认领吗？撤销后其他员工可重新认领该工序。`,
@@ -556,7 +570,7 @@ Page({
     if (!ok) return
     try {
       ui.showLoading('撤销中...')
-      await api.releaseClaim(id)
+      await api.releaseClaim(id, Number.isInteger(stepIndex) ? stepIndex : undefined)
       ui.hideLoading()
       ui.toast('已撤销认领', 'success')
       await this.refresh()

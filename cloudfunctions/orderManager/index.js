@@ -167,6 +167,26 @@ function getOrderCategory(order) {
   return 'processing'
 }
 
+/**
+ * 归一化认领映射：{ [stepIndex]: claim }
+ * 兼容旧单认领模型（activeClaim 单字段）：legacy 认领并入映射一起返回；
+ * 新模型 stepClaims 为 { 下标: 认领对象 } 映射，值可能为 null（释放后残留）需跳过
+ */
+function _normalizeStepClaims(order) {
+  const map = {}
+  const legacy = order && order.activeClaim
+  if (legacy && legacy.stepIndex !== undefined && legacy.stepIndex !== null) {
+    map[Number(legacy.stepIndex)] = legacy
+  }
+  const sc = order && order.stepClaims
+  if (sc && typeof sc === 'object') {
+    for (const k of Object.keys(sc)) {
+      if (sc[k]) map[Number(k)] = sc[k]
+    }
+  }
+  return map
+}
+
 function enrichOrder(order) {
   const steps = buildSteps(order.stepKeys)
   const curIdx = Number(order.currentStepIndex) || 0
@@ -177,6 +197,8 @@ function enrichOrder(order) {
   return {
     ...order,
     steps,
+    // 按工序认领映射（含旧 activeClaim 懒迁移），前端统一读 stepClaims
+    stepClaims: _normalizeStepClaims(order),
     overdue: isOverdue(order),
     category: getOrderCategory(order),
     categoryLabel: getOrderStatusLabel(order),
@@ -434,25 +456,14 @@ async function revertStep(orderId, stepKey, stepIndex, user) {
       status: newStatus,
       paused: newPaused,
       completedDate: newCompletedDate,
-      // 撤回会改变当前工序（或回退到已完成的工序），进行中的认领随之失效 → 释放
-      ...(order.activeClaim ? { activeClaim: null } : {}),
+      // 【按工序认领】撤回不再释放认领：未来工序的认领在撤回后依然有效，
+      // 被撤回工序的认领已在完成时归档，员工可重新认领
       updatedAt: db.serverDate()
     }
   })
 
   if (updateResult.stats.updated === 0) {
     throw new Error('该工序状态已变更，请刷新后重试')
-  }
-
-  // 撤回成功 → 归档被释放的认领流水（reason: revert），员工可重新认领
-  if (order.activeClaim) {
-    await _archiveClaim(order.activeClaim, {
-      status: 'released',
-      releasedAt: formatTime(),
-      releasedBy: user.name,
-      releasedById: user._id,
-      reason: 'revert'
-    })
   }
 
   // 乐观锁成功 → 才执行库存回退（支持多个规格分批回退）
@@ -617,7 +628,9 @@ async function updateStepKeys(orderId, newStepKeys, user) {
       paused: newPaused,
       completedDate: newCompletedDate,
       history: newHistory,
-      // 工序重排后认领绑定的工序下标失效 → 释放进行中的认领
+      // 【按工序认领】工序重排后所有认领绑定的工序下标失效 → 全部释放
+      // （_.set({}) 整体替换，避开「往 null 里建字段」的合并更新坑）
+      stepClaims: _.set({}),
       ...(order.activeClaim ? { activeClaim: null } : {}),
       updatedAt: db.serverDate()
     }
@@ -627,9 +640,10 @@ async function updateStepKeys(orderId, newStepKeys, user) {
     throw new Error('工单状态已变更，请刷新后重试')
   }
 
-  // 归档被释放的认领流水（reason: stepKeys）
-  if (order.activeClaim) {
-    await _archiveClaim(order.activeClaim, {
+  // 归档被释放的认领流水（reason: stepKeys），员工可在新工序列表上重新认领
+  const releasedClaims = Object.values(_normalizeStepClaims(order))
+  for (const c of releasedClaims) {
+    await _archiveClaim(c, {
       status: 'released',
       releasedAt: formatTime(),
       releasedBy: user.name,
@@ -1361,11 +1375,15 @@ async function _ensureClaimsCollection() {
 }
 
 /**
- * 认领工单当前工序
- * 幂等：本人已认领当前工序时重复调用直接成功；
- * 冲突：已被他人认领时报错；原子条件防止并发抢认领
+ * 认领工单工序（按工序认领模型）
+ * @param {string} orderId 工单ID
+ * @param {number} [targetStepIndex] 目标工序下标；缺省认领当前工序
+ *   员工可预先认领任意未来工序（岗位匹配该工序即可，不必等前面步骤完成流转）；
+ *   完成时由 completeStep 校验「流程已流转到该步」才允许提交。
+ * 幂等：本人已认领该工序时重复调用直接成功；
+ * 冲突：该工序已被他人认领时报错；原子条件防止并发抢认领
  */
-async function claimOrder(orderId, user) {
+async function claimOrder(orderId, targetStepIndex, user) {
   if (!user) throw new Error('用户不存在')
   if (user.status !== 'active') throw new Error('账号未启用')
   if (!orderId) throw new Error('缺少工单ID')
@@ -1380,54 +1398,69 @@ async function claimOrder(orderId, user) {
 
   const steps = buildSteps(order.stepKeys)
   const curIdx = Number(order.currentStepIndex) || 0
-  const curStep = steps[curIdx]
-  if (!curStep) throw new Error('工单工序已全部完成，无需认领')
+  if (steps.length === 0 || curIdx >= steps.length) throw new Error('工单工序已全部完成，无需认领')
 
-  const existing = order.activeClaim || null
-  // 幂等：本人已认领当前工序 → 重复点击无害，直接成功
-  if (existing && existing.userId === user._id && Number(existing.stepIndex) === curIdx) {
+  // 目标工序下标：缺省 = 当前工序；必须是未完成的工序
+  let targetIdx = (targetStepIndex === undefined || targetStepIndex === null || targetStepIndex === '')
+    ? curIdx
+    : Number(targetStepIndex)
+  if (!Number.isInteger(targetIdx) || targetIdx < 0 || targetIdx >= steps.length) {
+    throw new Error('要认领的工序不存在')
+  }
+  if (targetIdx < curIdx) {
+    throw new Error('该工序已完成，无法认领')
+  }
+
+  // 冲突/幂等判定：该工序已有人认领（含旧 activeClaim 懒迁移后的映射）
+  const existing = _normalizeStepClaims(order)[targetIdx] || null
+  if (existing && existing.userId === user._id) {
     return { alreadyClaimed: true, claim: existing, order: await getOrder(orderId) }
   }
-  if (existing && existing.userId !== user._id) {
-    throw new Error(`该工序已被「${existing.userName || '其他员工'}」认领，需等其完成流转，或由管理员撤销认领`)
-  }
-  // 异常兜底：本人认领的是旧工序（数据不一致时可能出现）→ 先归档旧认领再重新认领
-  if (existing && existing.userId === user._id) {
-    await _archiveClaim(existing, { status: 'released', releasedAt: formatTime(), releasedBy: user.name, releasedById: user._id, reason: 'stale' })
+  if (existing) {
+    throw new Error(`「${existing.stepName || steps[targetIdx].name}」已被「${existing.userName || '其他员工'}」认领，需等其完成流转，或由管理员撤销认领`)
   }
 
-  // 岗位校验：员工岗位必须包含当前工序 station，管理员放行
+  const targetStep = steps[targetIdx]
+  // 岗位校验：员工岗位必须包含目标工序 station，管理员放行
   if (!isAdmin) {
     const stations = Array.isArray(user.stations) ? user.stations : (user.station ? [user.station] : [])
-    if (!stations.includes(curStep.station)) {
-      throw new Error(`当前工序仅限${curStep.station}或管理员认领`)
+    // 流转工：特殊工种，可认领任意工序（当前或未来），其余权限与普通员工一致
+    if (!stations.includes(targetStep.station) && !stations.includes('流转工')) {
+      throw new Error(`「${targetStep.name}」仅限${targetStep.station}或管理员认领`)
     }
   }
 
   const claim = {
-    claimId: `C_${orderId}_${curIdx}_${Date.now()}`,
+    claimId: `C_${orderId}_${targetIdx}_${Date.now()}`,
     userId: user._id,
     userName: user.name,
-    stepIndex: curIdx,
-    stepKey: curStep.key,
-    stepName: curStep.name,
+    stepIndex: targetIdx,
+    stepKey: targetStep.key,
+    stepName: targetStep.name,
     claimedAt: formatTime()
   }
 
-  // 原子认领：仅当 currentStepIndex 未变且无人认领（activeClaim 缺失或为 null）时才写入
-  const lockBase = { _id: order._id, currentStepIndex: curIdx }
+  // 原子认领，两个条件同时成立才写入：
+  //  1) currentStepIndex <= targetIdx —— 目标工序尚未被流转完成（流程推进超过目标工序时条件不成立）
+  //  2) stepClaims.<idx> 不存在或为 null —— 该工序此刻无人认领
+  const claimPath = `stepClaims.${targetIdx}`
+  const lockBase = { _id: order._id, currentStepIndex: _.lte(targetIdx) }
   const claimFreeCond = _.or([
-    { ...lockBase, activeClaim: _.exists(false) },
-    { ...lockBase, activeClaim: _.eq(null) }
+    { ...lockBase, [claimPath]: _.exists(false) },
+    { ...lockBase, [claimPath]: _.eq(null) }
   ])
+  // 旧单认领模型懒迁移：activeClaim 搬进 stepClaims 映射并清空原字段
+  const legacy = order.activeClaim || null
+  const migrateData = (legacy && Number(legacy.stepIndex) !== targetIdx)
+    ? { [`stepClaims.${Number(legacy.stepIndex)}`]: _.set(legacy), activeClaim: _.set(null) }
+    : {}
   const upd = await db.collection('orders').where(claimFreeCond).update({
-    // 【坑】update 传普通对象会被 SDK 拆成点路径合并更新（activeClaim.claimId...），
-    // 目标字段 activeClaim 为 null 时报 "Cannot create field in element {activeClaim: null}"。
-    // 必须用 _.set 整体替换，null 也能写入。
-    data: { activeClaim: _.set(claim), updatedAt: db.serverDate() }
+    // 【坑】update 传普通对象会被 SDK 拆成点路径合并更新，目标为 null 时报
+    // "Cannot create field in element"。认领对象必须用 _.set 整体替换。
+    data: { [claimPath]: _.set(claim), ...migrateData, updatedAt: db.serverDate() }
   })
   if (upd.stats.updated === 0) {
-    throw new Error('认领失败：工单状态已变更或刚被他人认领，请刷新后重试')
+    throw new Error('认领失败：工单状态已变更或该工序刚被他人认领，请刷新后重试')
   }
 
   try {
@@ -1439,7 +1472,7 @@ async function claimOrder(orderId, user) {
 
   try {
     await db.collection('audit_logs').add({
-      data: { action: '认领工单', targetId: orderId, targetName: curStep.name, operatorId: user._id, operatorName: user.name, createdAt: db.serverDate() }
+      data: { action: '认领工序', targetId: orderId, targetName: targetStep.name, operatorId: user._id, operatorName: user.name, createdAt: db.serverDate() }
     })
   } catch (e) { /* 非关键 */ }
 
@@ -1448,8 +1481,10 @@ async function claimOrder(orderId, user) {
 
 /**
  * 撤销认领：认领人本人可取消自己的认领；管理员可撤销任何人的认领（换人推进）
+ * @param {string} orderId 工单ID
+ * @param {number} [targetStepIndex] 目标工序下标；缺省撤销当前工序的认领（兼容旧调用）
  */
-async function releaseClaim(orderId, user) {
+async function releaseClaim(orderId, targetStepIndex, user) {
   if (!user) throw new Error('用户不存在')
   if (user.status !== 'active') throw new Error('账号未启用')
   if (!orderId) throw new Error('缺少工单ID')
@@ -1457,15 +1492,42 @@ async function releaseClaim(orderId, user) {
   const res = await db.collection('orders').where({ id: orderId }).get()
   if (res.data.length === 0) throw new Error('工单不存在')
   const order = res.data[0]
-  const claim = order.activeClaim
-  if (!claim) throw new Error('该工单当前没有进行中的认领')
+  const curIdx = Number(order.currentStepIndex) || 0
+  const targetIdx = (targetStepIndex === undefined || targetStepIndex === null || targetStepIndex === '')
+    ? curIdx
+    : Number(targetStepIndex)
+  if (!Number.isInteger(targetIdx)) throw new Error('参数错误')
+
+  const claim = _normalizeStepClaims(order)[targetIdx] || null
+  if (!claim) throw new Error('该工序当前没有被认领')
 
   const isAdmin = user.role === 'admin' || user.role === 'superadmin'
   if (!isAdmin && claim.userId !== user._id) {
     throw new Error('仅认领人本人或管理员可撤销认领')
   }
   const reason = isAdmin && claim.userId !== user._id ? 'admin_revoke' : 'self_cancel'
-  await _releaseActiveClaim(order, user, reason)
+
+  // 条件更新：claimId 未被并发改过才清除，防止误删他人的新认领。
+  // 旧模型认领在 activeClaim 上，一并清空；新模型在 stepClaims.<idx> 上用 _.remove() 删除
+  const claimPath = `stepClaims.${targetIdx}`
+  const legacyHere = order.activeClaim && Number(order.activeClaim.stepIndex) === targetIdx && order.activeClaim.claimId === claim.claimId
+  const upd = legacyHere
+    ? await db.collection('orders').where({ _id: order._id, 'activeClaim.claimId': claim.claimId })
+      .update({ data: { activeClaim: null, [claimPath]: _.remove(), updatedAt: db.serverDate() } })
+    : await db.collection('orders').where({ _id: order._id, [`${claimPath}.claimId`]: claim.claimId })
+      .update({ data: { [claimPath]: _.remove(), updatedAt: db.serverDate() } })
+
+  await _archiveClaim(claim, {
+    status: 'released',
+    releasedAt: formatTime(),
+    releasedBy: user.name,
+    releasedById: user._id,
+    reason
+  })
+  if (upd.stats.updated === 0) {
+    // 工单认领已被并发变更，流水归档保留（released），工单以实际状态为准
+    console.warn(`[releaseClaim] 工单 ${orderId} 工序 ${targetIdx} 认领已被并发变更`)
+  }
 
   try {
     await db.collection('audit_logs').add({
@@ -1482,25 +1544,6 @@ async function releaseClaim(orderId, user) {
   } catch (e) { /* 非关键 */ }
 
   return { released: true, order: await getOrder(orderId) }
-}
-
-// 释放工单上的进行中认领（清 activeClaim + 归档流水），供撤销认领调用
-async function _releaseActiveClaim(order, user, reason) {
-  const claim = order.activeClaim
-  if (!claim) return false
-  // 条件更新：claimId 未被并发改过才清空，防止误删他人的新认领
-  const upd = await db.collection('orders').where({
-    _id: order._id,
-    'activeClaim.claimId': claim.claimId
-  }).update({ data: { activeClaim: null, updatedAt: db.serverDate() } })
-  await _archiveClaim(claim, {
-    status: 'released',
-    releasedAt: formatTime(),
-    releasedBy: user ? user.name : '',
-    releasedById: user ? user._id : '',
-    reason: reason || ''
-  })
-  return upd.stats.updated > 0
 }
 
 /**
@@ -1563,8 +1606,9 @@ async function listClaims(scope, statuses, user) {
         category: o.category || '',
         currentStepName: o.currentStepName || '',
         currentStation: o.currentStation || '',
+        currentStepIndex: Number(o.currentStepIndex) || 0,
         progress: o.progress || 0,
-        activeClaim: o.activeClaim || null,
+        stepClaims: o.stepClaims || {},
         completedDate: o.completedDate || null
       } : null
     }
@@ -1650,11 +1694,11 @@ exports.main = async (event, context) => {
 
       case 'claimOrder':
         if (!event.orderId) return { success: false, error: '缺少工单ID' }
-        return { success: true, ...(await claimOrder(event.orderId, user)) }
+        return { success: true, ...(await claimOrder(event.orderId, event.stepIndex, user)) }
 
       case 'releaseClaim':
         if (!event.orderId) return { success: false, error: '缺少工单ID' }
-        return { success: true, ...(await releaseClaim(event.orderId, user)) }
+        return { success: true, ...(await releaseClaim(event.orderId, event.stepIndex, user)) }
 
       case 'listClaims':
         return { success: true, claims: await listClaims(event.scope, event.statuses, user) }

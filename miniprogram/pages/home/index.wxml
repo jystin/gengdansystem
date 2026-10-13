@@ -11,12 +11,16 @@
       <view class="hero-pill">{{dashboard.total || 0}} 张单</view>
     </view>
 
-    <view class="hero-actions">
-      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn primary" bindtap="goCreateOrder">新建工单</button>
-      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn primary" bindtap="goMaterial">材料库存</button>
-      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn primary" bindtap="toggleEmpModal">员工管理</button>
-      <button class="action-btn primary" bindtap="goScan">扫码进单</button>
-      <button class="action-btn ghost" bindtap="goMyOrders">我的工单</button>
+    <!-- 主操作：扫码进单 / 我的工单（员工最高频入口，放大置顶） -->
+    <view class="hero-actions main-actions">
+      <button class="action-btn main-btn" bindtap="goScan">扫码进单</button>
+      <button class="action-btn main-btn" bindtap="goMyOrders">我的工单</button>
+    </view>
+    <!-- 次操作：管理功能与辅助入口（统一半透明弱化样式） -->
+    <view class="hero-actions sub-actions">
+      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn ghost" bindtap="goCreateOrder">新建工单</button>
+      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn ghost" bindtap="goMaterial">材料库存</button>
+      <button wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}" class="action-btn ghost" bindtap="toggleEmpModal">员工管理</button>
       <button class="action-btn ghost" bindtap="goOrders">查看工单</button>
       <button class="action-btn ghost" bindtap="goProfile">个人中心</button>
     </view>
@@ -80,11 +84,11 @@
           <text class="order-id">{{item.id}}</text>
           <text class="badge {{item.category === 'notStarted' ? 'badge-grey' : item.category === 'paused' ? 'badge-warning' : item.category === 'completed' ? 'badge-success' : item.category === 'overdue' ? 'badge-danger' : item.category === 'urgent' ? 'badge-urgent' : 'badge-info'}}">{{item.statusLabel}}</text>
         </view>
-        <view class="subtle">{{item.customerName}}</view>
+        <view class="order-customer">{{item.customerName}}</view>
         <view class="order-meta">
-          <text>种类 {{item.type}}</text>
-          <text>尺寸 {{item.size}}</text>
-          <text>当前 {{item.currentStepName}}</text>
+          <text>种类 <text class="meta-val">{{item.type}}</text></text>
+          <text>尺寸 <text class="meta-val">{{item.size}}</text></text>
+          <text>当前 <text class="meta-val">{{item.currentStepName}}</text></text>
         </view>
       </view>
     </block>

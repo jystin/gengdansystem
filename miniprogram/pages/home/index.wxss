@@ -216,21 +216,38 @@
   gap: 16rpx;
 }
 
+/* 工单号降为次要信息（小号浅色），让位给公司名称 */
 .order-id {
-  font-size: 28rpx;
-  font-weight: 700;
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #94a3b8;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 公司名称：员工找单的第一关键字，放大 + 品牌青色突出 */
+.order-customer {
+  margin-top: 4rpx;
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #0f766e;
+}
+
+/* 种类/尺寸/当前：加大字号便于快速扫读；数值用琥珀金加重（与主按钮同色，
+   全卡片仅公司名青色 + 数值琥珀金两个强调色，克制且协调） */
 .order-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 16rpx;
+  gap: 20rpx;
   margin-top: 10rpx;
-  font-size: 22rpx;
-  color: #64748b;
+  font-size: 26rpx;
+  color: #94a3b8;
+}
+
+.order-meta .meta-val {
+  color: #d97706;
+  font-weight: 700;
 }
 
 .log-action {
@@ -501,3 +518,58 @@
 
 .prod-emp-name { font-size: 24rpx; font-weight: 600; }
 .prod-station { font-size: 20rpx; color: #64748b; }
+
+/* ===== 主操作按钮：扫码进单 / 我的工单（员工高频入口，放大置顶）===== */
+.main-actions {
+  gap: 20rpx;
+  margin-top: 30rpx;
+}
+
+/* 两个主按钮统一样式：Apple 风琥珀金渐变——8 档色标深邃过渡（顶部受光，
+   向下逐渐沉入深琥珀棕），叠加顶部高光与柔和投影 */
+.main-btn {
+  flex: 1 1 50%;
+  font-size: 34rpx;
+  font-weight: 700;
+  letter-spacing: 4rpx;
+  line-height: 2.5;
+  border-radius: 20rpx;
+  background: linear-gradient(180deg,
+    #fcd34d 0%,
+    #fbbf24 14%,
+    #f59e0b 30%,
+    #e88b0a 46%,
+    #d97706 62%,
+    #c05e08 78%,
+    #a34a06 90%,
+    #8f3f05 100%);
+  color: #ffffff;
+  text-shadow: 0 1rpx 2rpx rgba(120, 53, 15, 0.4);
+  box-shadow:
+    inset 0 2rpx 2rpx rgba(255, 255, 255, 0.4),
+    inset 0 -3rpx 8rpx rgba(120, 53, 15, 0.35),
+    0 8rpx 20rpx rgba(180, 83, 9, 0.42);
+}
+
+/* 按下态：微微下沉变暗，反馈清晰 */
+.main-btn:active {
+  transform: scale(0.98);
+  background: linear-gradient(180deg,
+    #e88b0a 0%,
+    #d97706 30%,
+    #b45309 68%,
+    #92400e 100%);
+  box-shadow:
+    inset 0 2rpx 6rpx rgba(120, 53, 15, 0.35),
+    0 4rpx 10rpx rgba(180, 83, 9, 0.32);
+}
+
+/* 次操作区：缩小一号，与主操作拉开层级 */
+.sub-actions {
+  margin-top: 18rpx;
+}
+
+.sub-actions .action-btn {
+  font-size: 25rpx;
+  line-height: 2.3;
+}

@@ -29,6 +29,8 @@
         <view class="subtle" wx:if="{{item.order}}">{{item.order.customerName}}</view>
         <view class="claim-line">
           <text class="claim-step">{{item.stepName}}</text>
+          <text wx:if="{{item._waiting}}" class="claim-waiting">等待前置工序</text>
+          <text wx:elif="{{item._canWork}}" class="claim-ready">可操作</text>
           <text class="claim-time">认领于 {{item._claimedAt}}</text>
         </view>
         <view class="progress-line" wx:if="{{item.order}}">
@@ -37,7 +39,7 @@
           </view>
           <text class="progress-text">{{item.order.progress}}%</text>
         </view>
-        <view wx:if="{{item.order && item.order.activeClaim && item.order.activeClaim.userId !== item.userId}}" class="subtle warn-text">该工序认领已被管理员转移</view>
+        <view wx:if="{{item.order && item.order.stepClaims && item.order.stepClaims[item.stepIndex] && item.order.stepClaims[item.stepIndex].userId !== item.userId}}" class="subtle warn-text">该工序认领已被管理员转移</view>
       </view>
     </block>
     <view wx:if="{{!loading && pending.length === 0}}" class="empty-state card">
@@ -60,6 +62,8 @@
           <text class="claim-step">{{item.stepName}}</text>
           <text class="claim-time">完成于 {{item._completedAt}}</text>
         </view>
+        <!-- 认领人 ≠ 实际操作人（管理员/流转工跨认领完成）时显示 -->
+        <view wx:if="{{item.completedByName}}" class="proxy-line">由 {{item.completedByName}}（{{item.completedByRole || '管理员'}}）完成流转</view>
       </view>
     </block>
     <view wx:if="{{!loading && done.length === 0}}" class="empty-state card">

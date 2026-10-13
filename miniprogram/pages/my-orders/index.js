@@ -30,7 +30,11 @@ Page({
       const decorate = (c) => ({
         ...c,
         _claimedAt: String(c.claimedAt || '').slice(0, 16),
-        _completedAt: String(c.completedAt || '').slice(0, 16)
+        _completedAt: String(c.completedAt || '').slice(0, 16),
+        // 预认领的未来工序：流程还没流转到该步 → 显示「等待前置工序」；
+        // 流程已到达 → 可进详情页填写实际数据并完成流转
+        _waiting: !!(c.order && Number(c.order.currentStepIndex) !== Number(c.stepIndex)),
+        _canWork: !!(c.order && Number(c.order.currentStepIndex) === Number(c.stepIndex))
       })
       const pending = (claims || []).filter(c => c.status === 'active').map(decorate)
       const done = (claims || []).filter(c => c.status === 'completed').map(decorate)

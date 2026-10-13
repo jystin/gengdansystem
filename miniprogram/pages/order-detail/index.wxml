@@ -6,7 +6,7 @@
     <view class="row">
       <view>
         <view class="title">{{order.id}}</view>
-        <view class="subtle">{{order.customerName}}</view>
+        <view class="order-customer">{{order.customerName}}</view>
       </view>
       <view class="row-actions">
         <view wx:if="{{isAdmin && order.status !== 'completed' && !editingFields}}" class="btn-edit" bindtap="enterEditFields">编辑</view>
@@ -139,6 +139,14 @@
             </view>
             <view class="subtle" wx:if="{{index < order.history.length}}">{{order.history[index].operator}} - {{order.history[index].completedAt}}{{order.history[index].qty ? ' - ' + order.history[index].qty + '根' : ''}}{{order.history[index].programmerName ? ' - ' + (order.history[index].partnerRole || '编程员') + ' ' + order.history[index].programmerName : ''}}</view>
             <view class="subtle" wx:else>等待处理</view>
+            <!-- 未来工序的认领入口：可预先认领符合自己岗位的工序，不必等前面步骤完成 -->
+            <view wx:if="{{index > order.currentStepIndex && stepClaimFlags[index] && (stepClaimFlags[index].has || stepClaimFlags[index].canClaim)}}" class="step-claim-row">
+              <block wx:if="{{stepClaimFlags[index].has}}">
+                <text class="step-claim-chip {{stepClaimFlags[index].mine ? 'mine' : 'other'}}">{{stepClaimFlags[index].mine ? '✓ 我已认领' : stepClaimFlags[index].userName}}</text>
+                <button wx:if="{{stepClaimFlags[index].mine || isAdmin}}" size="mini" class="step-claim-release" catchtap="releaseStepClaim" data-step-index="{{index}}" loading="{{claimBtnLoading}}">撤销</button>
+              </block>
+              <button wx:elif="{{stepClaimFlags[index].canClaim}}" size="mini" class="step-claim-btn" catchtap="claimStep" data-step-index="{{index}}" loading="{{claimBtnLoading}}">认领</button>
+            </view>
           </view>
         </view>
       </block>
@@ -282,20 +290,20 @@
   <view class="section card action-panel">
     <view class="section-title">操作面板</view>
 
-    <!-- 认领区块：仅未完工工单显示 -->
+    <!-- 认领区块：仅未完工工单显示（当前工序认领；未来工序在工序流转列表里认领） -->
     <view wx:if="{{order.status !== 'completed'}}" class="claim-section">
       <!-- 我已认领 -->
       <view wx:if="{{claimState === 'mine'}}" class="claim-bar mine">
         <view class="claim-info">
-          <text class="claim-main">✓ 我已认领「{{order.activeClaim.stepName}}」</text>
-          <text class="claim-sub">完成并流转后自动移入「我的工单 · 已完成」</text>
+          <text class="claim-main">✓ 我已认领「{{currentClaim.stepName}}」</text>
+          <text class="claim-sub">轮到该工序时即可填写实际数据并完成流转</text>
         </view>
         <button size="mini" class="claim-mini-btn" bindtap="releaseCurrentClaim" loading="{{claimBtnLoading}}">取消认领</button>
       </view>
       <!-- 他人认领中 -->
       <view wx:elif="{{claimState === 'other'}}" class="claim-bar other">
         <view class="claim-info">
-          <text class="claim-main">{{order.activeClaim.userName}} 已认领「{{order.activeClaim.stepName}}」</text>
+          <text class="claim-main">{{currentClaim.userName}} 已认领「{{currentClaim.stepName}}」</text>
           <text class="claim-sub">其完成流转前，其他员工不能认领该工序</text>
         </view>
         <button wx:if="{{isAdmin}}" size="mini" class="claim-mini-btn warn" bindtap="releaseCurrentClaim" loading="{{claimBtnLoading}}">撤销认领</button>
@@ -306,17 +314,17 @@
           <text class="claim-main">当前工序：{{currentStepName}} · {{currentStepStation}}</text>
           <text class="claim-sub">认领后进入「我的工单」，其他员工需等您完成流转</text>
         </view>
-        <button size="mini" class="claim-mini-btn primary" bindtap="claimCurrentStep" loading="{{claimBtnLoading}}">认领此工单</button>
+        <button size="mini" class="claim-mini-btn primary" bindtap="claimCurrentStep" loading="{{claimBtnLoading}}">认领此工序</button>
       </view>
     </view>
 
-    <view wx:if="{{canComplete}}" class="subtle admin-tip">{{isAdmin ? '管理员可直接点击已完成，系统会自动流转到下一工序。' : '当前工序已分配给您，请确认完成后点击流转。'}}</view>
+    <view wx:if="{{canComplete}}" class="subtle admin-tip">{{isAdmin ? '管理员可直接点击已完成，系统会自动流转到下一工序。' : (isFloater ? '您是流转工，可填写并完成流转任意工序。' : '当前工序已分配给您，请确认完成后点击流转。')}}</view>
     <view wx:elif="{{order.status !== 'completed'}}" class="subtle no-permission-tip">您无权操作当前工序，请等待{{order.currentStation}}处理。</view>
 
     <view wx:if="{{canComplete}}">
       <!-- 操作员选择（所有工序都需要） -->
       <view class="form-field">
-        <view class="form-label">工序操作员<text class="required-star">*</text><text class="form-label-tip">仅限{{currentStepStation || '对应岗位'}}或管理员</text></view>
+        <view class="form-label">工序操作员<text class="required-star">*</text><text class="form-label-tip">仅限{{currentStepStation || '对应岗位'}}、流转工或管理员</text></view>
         <view class="operator-select" bindtap="showEmployeePicker" data-target="operator">
           <text class="{{operatorId ? '' : 'placeholder'}}">{{operatorLabel}}</text>
           <text class="select-arrow">▾</text>
@@ -393,7 +401,7 @@
       <!-- 其他工序 -->
       <view wx:else>
         <view class="form-field">
-          <view class="form-label"><text class="required-star">*</text> 实际处理根数</view>
+          <view class="form-label">实际处理根数<text class="required-star">*</text></view>
           <input class="form-input" type="digit" placeholder="请输入实际处理根数" value="{{completedQty}}" bindinput="onQtyInput" bindblur="onQtyBlur" confirm-type="done" cursor-spacing="20" />
         </view>
 

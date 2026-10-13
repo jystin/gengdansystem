@@ -32,14 +32,14 @@
 
 .field-label {
   display: block;
-  font-size: 22rpx;
+  font-size: 24rpx;
   color: #64748b;
 }
 
 .field-value {
   display: block;
   margin-top: 8rpx;
-  font-size: 26rpx;
+  font-size: 28rpx;
   font-weight: 600;
 }
 
@@ -113,9 +113,10 @@
   padding-bottom: 0;
 }
 
+/* 工序名称：员工识别流程步骤的关键信息，放大显示 */
 .step-name,
 .history-name {
-  font-size: 26rpx;
+  font-size: 30rpx;
   font-weight: 600;
 }
 
@@ -261,8 +262,9 @@
   margin-bottom: 20rpx;
 }
 
+/* ===== 操作面板表单：整体放大字号，方便员工在手机上看清 ===== */
 .form-label {
-  font-size: 26rpx;
+  font-size: 30rpx;
   font-weight: 600;
   color: #334155;
   margin-bottom: 10rpx;
@@ -277,7 +279,7 @@
 /* 表单标签里的浅色说明（如「本工序需要先编程」） */
 .form-label-tip {
   margin-left: 12rpx;
-  font-size: 20rpx;
+  font-size: 22rpx;
   font-weight: 400;
   color: #94a3b8;
 }
@@ -285,7 +287,7 @@
 /* 表单下方的说明 / 警示文案 */
 .form-hint {
   margin-top: 10rpx;
-  font-size: 20rpx;
+  font-size: 22rpx;
   line-height: 1.5;
   color: #94a3b8;
 }
@@ -306,13 +308,13 @@
 }
 
 .repeat-option {
-  min-width: 108rpx;
-  height: 68rpx;
-  padding: 0 20rpx;
+  min-width: 116rpx;
+  height: 72rpx;
+  padding: 0 22rpx;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 26rpx;
+  font-size: 28rpx;
   color: #334155;
   background: #f8fafc;
   border: 2rpx solid #e2e8f0;
@@ -337,7 +339,7 @@
   flex-shrink: 0;
   margin-left: 8rpx;
   padding: 2rpx 10rpx;
-  font-size: 18rpx;
+  font-size: 20rpx;
   line-height: 1.6;
   color: #7c3aed;
   background: #f3e8ff;
@@ -346,12 +348,12 @@
 
 .form-input {
   width: 100%;
-  height: 80rpx;
+  height: 88rpx;
   padding: 0 24rpx;
   border: 2rpx solid #e2e8f0;
   border-radius: 12rpx;
   background: #ffffff;
-  font-size: 28rpx;
+  font-size: 32rpx;
   color: #1e293b;
   box-sizing: border-box;
 }
@@ -367,12 +369,12 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  height: 80rpx;
+  height: 88rpx;
   padding: 0 24rpx;
   border: 2rpx solid #e2e8f0;
   border-radius: 12rpx;
   background: #ffffff;
-  font-size: 28rpx;
+  font-size: 32rpx;
   color: #1e293b;
   box-sizing: border-box;
 }
@@ -383,12 +385,12 @@
 
 .form-textarea {
   width: 100%;
-  min-height: 120rpx;
+  min-height: 130rpx;
   padding: 20rpx 24rpx;
   border: 2rpx solid #e2e8f0;
   border-radius: 12rpx;
   background: #ffffff;
-  font-size: 26rpx;
+  font-size: 30rpx;
   color: #1e293b;
   box-sizing: border-box;
 }
@@ -871,12 +873,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 80rpx;
+  height: 88rpx;
   padding: 0 24rpx;
   border: 2rpx solid #e2e8f0;
   border-radius: 12rpx;
   background: #ffffff;
-  font-size: 28rpx;
+  font-size: 32rpx;
   color: #1e293b;
 }
 
@@ -886,7 +888,7 @@
 
 .select-arrow {
   color: #94a3b8;
-  font-size: 28rpx;
+  font-size: 30rpx;
 }
 
 /* 操作员搜索弹窗 */
@@ -1219,4 +1221,62 @@
 .claim-mini-btn:not(.primary):not(.warn) {
   background: #f1f5f9;
   color: #475569;
+}
+
+/* ===== 按工序认领：工序流转列表里的未来工序认领入口 ===== */
+.step-claim-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-top: 10rpx;
+}
+
+.step-claim-chip {
+  padding: 2rpx 14rpx;
+  border-radius: 999rpx;
+  font-size: 20rpx;
+  line-height: 32rpx;
+}
+
+.step-claim-chip.mine {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.step-claim-chip.other {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.step-claim-btn {
+  margin: 0;
+  font-size: 22rpx;
+  line-height: 2;
+  padding: 0 24rpx;
+  border-radius: 999rpx;
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.step-claim-release {
+  margin: 0;
+  font-size: 22rpx;
+  line-height: 2;
+  padding: 0 20rpx;
+  border-radius: 999rpx;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+/* ===== 头部信息层级优化：工单号缩小次要化，公司名称放大突出 ===== */
+.summary .title {
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.summary .order-customer {
+  margin-top: 4rpx;
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #0f766e;
 }

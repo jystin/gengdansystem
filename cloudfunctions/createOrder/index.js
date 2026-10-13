@@ -192,7 +192,9 @@ exports.main = async (event, context) => {
       drawings: Array.isArray(drawings) ? drawings.slice(0, 20) : [],
       drawingDetail: safeDrawingDetail,
       history: [],
-      // 认领：新工单默认无人认领（老工单无此字段视为 null，claimOrder 已兼容）
+      // 认领（按工序认领模型）：stepClaims 为 { 工序下标: 认领对象 } 映射，
+      // 新工单默认无人认领；activeClaim 为旧单认领模型字段，保留仅为兼容老代码读取
+      stepClaims: {},
       activeClaim: null,
       remarks: remarks ? String(remarks).slice(0, 500) : '',
       orderDate: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,

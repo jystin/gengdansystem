@@ -230,12 +230,18 @@ function resolvePartner(step) {
   }
 }
 
+/** 特殊工种：流转工——可认领并完成流转任意工序（不受岗位匹配限制），
+ *  除此之外与普通员工权限一致（不能撤回工序 / 改工序配置 / 看管理员视图） */
+const FLOATER_STATION = '流转工'
+
 /** 非工序岗位：只承担「配合人员」职责，不参与工序流转。
  *  「编程工」：原「编程」工序已下线，但编程员岗位仍需可分配（敦压/拉尾子/精车/铣方头需要编程员配合）；
- *  「调字员」：打字工序的配合人员岗位。 */
+ *  「调字员」：打字工序的配合人员岗位；
+ *  「流转工」：可流转任意工序的特殊工种。 */
 const EXTRA_STATIONS = [
   { station: '编程工', name: '编程' },
-  { station: '调字员', name: '调字' }
+  { station: '调字员', name: '调字' },
+  { station: FLOATER_STATION, name: '流转' }
 ]
 
 /**
@@ -290,8 +296,10 @@ function pickOperatorEmployees(employees, station) {
   return all.filter(e => {
     if (!e) return false
     if (e.role === 'admin' || e.role === 'superadmin') return true
-    if (!st) return false
     const stations = Array.isArray(e.stations) ? e.stations : (e.station ? [e.station] : [])
+    // 流转工：可作为任意工序的操作员
+    if (stations.includes(FLOATER_STATION)) return true
+    if (!st) return false
     return stations.some(s => String(s).trim() === st)
   })
 }
@@ -413,15 +421,16 @@ async function toggleOrderUrgent(orderId, urgent) {
   return callFunction('orderManager', { action: 'toggleUrgent', orderId, urgent })
 }
 // ===== 工单认领 =====
-// 认领当前工序（员工岗位须匹配当前工序，管理员不受限；幂等，重复调用无害）
-async function claimOrder(orderId) {
+// 认领工序：员工可认领当前或任意未来工序（岗位匹配该工序）；管理员可认领任意工序。
+// stepIndex 缺省时后端认领当前工序（兼容旧调用）
+function claimOrder(orderId, stepIndex) {
   clearCache()
-  return callFunction('orderManager', { action: 'claimOrder', orderId })
+  return callFunction('orderManager', { action: 'claimOrder', orderId, stepIndex })
 }
-// 撤销认领（认领人本人或管理员）
-async function releaseClaim(orderId) {
+// 撤销认领（认领人本人或管理员）：stepIndex 指定要撤销的工序，缺省撤销当前工序认领
+function releaseClaim(orderId, stepIndex) {
   clearCache()
-  return callFunction('orderManager', { action: 'releaseClaim', orderId })
+  return callFunction('orderManager', { action: 'releaseClaim', orderId, stepIndex })
 }
 // 认领列表：scope='my' 本人（我的工单）；scope='all' 全员（管理员认领视图）
 // 每条带 order 工单概要（状态标签/当前工序/进度等）
@@ -790,6 +799,7 @@ module.exports = {
   pickPartnerEmployees,
   pickOperatorEmployees,
   EXTRA_STATIONS,
+  FLOATER_STATION,
   getSelectableStations,
   getRoughnessCoefficient,
   buildMonthHeaders,
