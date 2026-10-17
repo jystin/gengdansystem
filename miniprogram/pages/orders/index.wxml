@@ -44,6 +44,12 @@
       </view>
     </view>
 
+    <!-- 一键完成待审批横幅（管理员） -->
+    <view wx:if="{{isAdmin && batchApprovals.length > 0}}" class="batch-banner" bindtap="openBatchModal">
+      <text class="batch-banner-text">有 {{batchApprovals.length}} 个一键完成申请待审批</text>
+      <text class="batch-banner-arrow">›</text>
+    </view>
+
     <view class="search-box">
       <input class="search-input" placeholder="输入单号 / 客户 / 种类搜索" value="{{keyword}}" bindinput="onKeywordInput" />
     </view>
@@ -78,7 +84,7 @@
           <view class="subtle">当前工序：{{item.currentStepName}} · {{item.currentStation}}</view>
           <!-- 普通分类：显示所有进行中的认领（一张工单可有多道工序被认领） -->
           <block wx:if="{{activeCategory !== 'claimedActive' && activeCategory !== 'claimedDone'}}">
-            <view wx:for="{{item._claimHints}}" wx:for-item="hint" wx:key="stepName" class="subtle claim-hint">🔒 {{hint.userName}} 已认领「{{hint.stepName}}」</view>
+            <view wx:for="{{item._claimHints}}" wx:for-item="hint" wx:key="key" class="subtle claim-hint">🔒 {{hint.userName}} 已认领「{{hint.stepName}}」</view>
           </block>
           <!-- 认领分类：认领流水行（认领人 / 工序 / 时间，进行中的可撤销） -->
           <view wx:if="{{item._claim}}" class="claim-row">
@@ -144,6 +150,29 @@
       <view class="modal-actions">
         <button class="modal-btn cancel" bindtap="onCancelDelete">取消</button>
         <button class="modal-btn danger" bindtap="onConfirmDelete" loading="{{deleteConfirmBtnLoading}}" disabled="{{deleteConfirmBtnLoading}}">确认删除</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 一键完成审批弹窗（管理员） -->
+  <view wx:if="{{showBatchModal}}" class="batch-mask" bindtap="closeBatchModal">
+    <view class="batch-panel" catchtap="stopBatchBubble">
+      <view class="batch-head">
+        <text class="batch-title">一键完成审批</text>
+        <text class="batch-close" bindtap="closeBatchModal">✕</text>
+      </view>
+      <view wx:if="{{batchApprovals.length === 0}}" class="subtle batch-empty">暂无待审批申请</view>
+      <view wx:for="{{batchApprovals}}" wx:key="_id" class="batch-item">
+        <view class="row">
+          <text class="batch-order">{{item.orderId}}</text>
+          <text class="subtle">{{item.order ? item.order.customerName : ''}}</text>
+        </view>
+        <view class="subtle batch-line">申请人：{{item.requestedByName}} · 操作员：{{item.operatorName}} · 每道 {{item.qty}} 根</view>
+        <view class="subtle batch-line" wx:if="{{item.order}}">剩余 {{item.order.batchRemaining}} 道工序（当前：{{item.order.currentStepName}}）</view>
+        <view class="batch-actions">
+          <button size="mini" class="batch-btn reject" bindtap="reviewBatch" data-id="{{item._id}}" data-approve="{{false}}">拒绝</button>
+          <button size="mini" class="batch-btn accept" bindtap="reviewBatch" data-id="{{item._id}}" data-approve="{{true}}">通过</button>
+        </view>
       </view>
     </view>
   </view>

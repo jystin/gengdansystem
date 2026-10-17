@@ -104,21 +104,27 @@ function formatTime() {
 }
 
 /**
- * 归一化认领映射：{ [stepIndex]: claim }（与 orderManager._normalizeStepClaims 同逻辑；
- * 本函数独立部署，需自带一份）
- * 兼容旧单认领模型（activeClaim 单字段）：legacy 认领并入映射；stepClaims 值为 null 时跳过
+ * 归一化认领映射：{ [stepIndex]: claim[] }（多认领模型，与 orderManager._normalizeStepClaims 同逻辑）
+ * 兼容旧数据：activeClaim 单字段、stepClaims 值为单个对象 → 一律包装成数组
  */
 function _normalizeStepClaims(order) {
   const map = {}
-  const legacy = order && order.activeClaim
-  if (legacy && legacy.stepIndex !== undefined && legacy.stepIndex !== null) {
-    map[Number(legacy.stepIndex)] = legacy
-  }
   const sc = order && order.stepClaims
   if (sc && typeof sc === 'object') {
     for (const k of Object.keys(sc)) {
-      if (sc[k]) map[Number(k)] = sc[k]
+      const v = sc[k]
+      if (Array.isArray(v)) {
+        const list = v.filter(Boolean)
+        if (list.length > 0) map[Number(k)] = list
+      } else if (v) {
+        map[Number(k)] = [v]
+      }
     }
+  }
+  const legacy = order && order.activeClaim
+  if (legacy && legacy.stepIndex !== undefined && legacy.stepIndex !== null) {
+    const idx = Number(legacy.stepIndex)
+    if (!map[idx]) map[idx] = [legacy]
   }
   return map
 }
@@ -194,91 +200,55 @@ exports.main = async (event, context) => {
 
     const oldStepKeys = Array.isArray(order.stepKeys) ? order.stepKeys : []
     const steps = buildSteps(oldStepKeys)
-    const curIdx = Number(order.currentStepIndex) || 0
-    const currentStep = steps[curIdx]
-    if (!currentStep) {
-      // 所有工序已完成或索引越界，记录完工操作并标记为已完成
-      // 关键修复：使用乐观锁防止并发完成
-      const completeHistoryEntry = {
-        stepKey: '__completed__',
-        stepName: '工单完工',
-        operatorId: effectiveOperator._id,
-        operator: effectiveOperator.name,
-        role: '系统',
-        completedAt: formatTime(),
-        note: note || '系统自动完工确认',
-        qty: null,
-        materialConsumption: null
-      }
-      const finalHistory = [...(order.history || []), completeHistoryEntry]
-      // 完工时清掉所有进行中认领（按工序认领映射整体清空 + 旧模型字段兜底）
-      const leftoverClaims = _normalizeStepClaims(order)
-      const lockUpdate = await db.collection('orders').where({
-        _id: order._id,
-        status: 'processing' // 修复：仅当状态还是 processing 时才置为 completed，防止并发重复完工
-      }).update({
-        data: {
-          status: 'completed',
-          completedDate: formatTime(),
-          history: finalHistory,
-          stepClaims: db.command.set({}),
-          ...(order.activeClaim ? { activeClaim: null } : {}),
-          updatedAt: db.serverDate()
-        }
-      })
-      if (lockUpdate.stats.updated === 0) {
-        return { success: false, error: '该工单已被处理，请刷新后重试' }
-      }
-      // 归档残留认领流水（跨认领完成时同样记录实际操作人）
-      for (const c of Object.values(leftoverClaims)) {
-        const proxyDone = c.userId !== user._id
-        await _archiveClaim(c, {
-          status: 'completed',
-          completedAt: formatTime(),
-          ...(proxyDone ? {
-            completedByName: user.name,
-            completedByRole: isAdmin ? '管理员' : '流转工',
-            completedById: user._id
-          } : {})
-        })
-      }
-      // 记录审计日志
-      try {
-        await db.collection('audit_logs').add({
-          data: {
-            action: '完成工序',
-            targetId: orderId,
-            targetName: '工单完工',
-            operatorId: effectiveOperator._id,
-            operatorName: effectiveOperator.name,
-            detail: {
-              submittedBy: user.name,
-              submittedById: user._id,
-              proxy: user._id !== effectiveOperator._id,
-              note: note || '系统自动完工确认'
-            },
-            createdAt: db.serverDate()
-          }
-        })
-      } catch (e) { /* 非关键 */ }
-      // 构建 steps 数组供前端使用（自动完工情况）
-      const finalSteps = buildSteps(order.stepKeys)
-      return { success: true, order: { ...order, stepKeys: oldStepKeys, steps: finalSteps, currentStepName: '已完成', currentStation: '入库完成', status: 'completed', completedDate: formatTime(), history: finalHistory, activeClaim: null, stepClaims: {} } }
-    }
+    if (steps.length === 0) return { success: false, error: '工单没有工序，无法提交' }
 
-    // ===== 认领校验：工序已被认领时，认领人本人 / 管理员 / 流转工可完成 =====
-    // 认领绑定工序下标（stepClaims 映射，含旧 activeClaim 懒迁移）；
-    // 管理员 / 流转工跨认领完成时，实际操作人记录进认领流水（completedBy*），
-    // 认领人的「我的工单 · 已完成」里会显示由谁完成流转
-    const stepClaimsMap = _normalizeStepClaims(order)
-    const activeClaim = stepClaimsMap[curIdx] || null
-    const claimActive = !!activeClaim
-    const isFloaterUser = (user.stations || []).includes('流转工')
-    if (claimActive && !isAdmin && !isFloaterUser && activeClaim.userId !== user._id) {
-      return {
-        success: false,
-        error: `该工序已被「${activeClaim.userName || '其他员工'}」认领，需等其完成流转，或由管理员撤销认领`
+    // ===== 并行模型：提交目标 = 任意未完成工序（event.stepIndex）=====
+    // currentStepIndex 新语义 = 「最后一次提交数量的工序下标」（用于首页/列表「当前工序」展示）
+    const qtyTargetOrder = Number(order.qty) || 0
+    const stepDoneMap = order.stepDone || {}
+    const isStepDoneAt = (i) => {
+      if (stepDoneMap[i]) return true
+      if (qtyTargetOrder > 0 && (Number((order.stepQty || {})[i]) || 0) >= qtyTargetOrder) return true
+      // 老工单兼容：从未用过并行模型（无 stepDone 字段）时，顺序指针之前的工序视为已完成
+      if (!order.stepDone && i < (Number(order.currentStepIndex) || 0)) return true
+      return false
+    }
+    let rawIdx
+    if (event.stepIndex === undefined || event.stepIndex === null || event.stepIndex === '') {
+      // 缺省 = 第一道未完成工序（currentStepIndex 是展示指针，不适合做提交目标缺省）
+      rawIdx = steps.findIndex((s, i) => !isStepDoneAt(i))
+      if (rawIdx < 0) {
+        return { success: false, error: '所有工序已完成，请在操作面板确认「工单已完成」' }
       }
+    } else {
+      rawIdx = Number(event.stepIndex)
+    }
+    if (!Number.isInteger(rawIdx) || rawIdx < 0 || rawIdx >= steps.length) {
+      return { success: false, error: '要完成的工序不存在' }
+    }
+    if (isStepDoneAt(rawIdx)) {
+      return { success: false, error: `「${steps[rawIdx].name}」已完成，无需重复提交` }
+    }
+    const idx = rawIdx
+    const currentStep = steps[idx]
+
+    // ===== 认领校验（并行模型）：普通员工必须先认领该工序才能提交；管理员 / 流转工可跨认领 =====
+    // 多认领模型：同一工序可被多人认领（stepClaims 值为数组，含旧数据兼容）；
+    // 管理员 / 流转工跨认领完成时，实际操作人记录进认领流水（completedBy*）
+    const stepClaimsMap = _normalizeStepClaims(order)
+    const claimList = stepClaimsMap[idx] || []
+    const claimActive = claimList.length > 0
+    const isFloaterUser = (user.stations || []).includes('流转工')
+    const iAmClaimant = claimList.some(c => c.userId === user._id)
+    if (!isAdmin && !isFloaterUser && !iAmClaimant) {
+      if (claimActive) {
+        const names = claimList.map(c => c.userName || '其他员工').join('、')
+        return {
+          success: false,
+          error: `「${currentStep.name}」已被「${names}」认领，如需协作请先加入认领`
+        }
+      }
+      return { success: false, error: `请先认领「${currentStep.name}」再提交根数` }
     }
 
     // ===== 配合人员校验（敦压 / 拉尾子 / 精车 / 铣方头 = 编程员；打字 = 调字员）=====
@@ -384,6 +354,8 @@ exports.main = async (event, context) => {
       stepKey: currentStep.key,
       stepName: currentStep.name,
       stepSeq: currentStep._seq || 1,
+      // 工序下标：前端按工序分组展示历史记录（老数据无此字段时按下标对齐）
+      stepIndex: idx,
       operatorId: effectiveOperator._id,
       operator: effectiveOperator.name,
       role: currentStep.station,
@@ -405,129 +377,77 @@ exports.main = async (event, context) => {
     }
 
     const newHistory = [...(order.history || []), historyEntry]
-    const newStepIndex = curIdx + 1
 
-    // ===== 可重复工序（精车）道数调整 =====
-    // 前端传 repeatTotal = 「本工单该工序总共要几道」。按差值追加/回收「未完成」的重复工序：
-    //   例：已排 精车1/2/3，正在完成精车1，选 4 道 → 追加 1 道（精车4）
-    //       已排 精车1/2/3，正在完成精车2，改选 2 道 → 回收最后 1 道未完成的精车
-    // 只会动「未完成」的那几道（位于当前工序之后），已完成的历史记录不受影响。
-    const newStepKeys = [...oldStepKeys]
-    let repeatDelta = 0
-    if (currentStep.repeatable) {
-      const maxTotal = Number(currentStep.maxRepeat) || 4
-      const totalNow = newStepKeys.filter(k => k === currentStep.key).length
-      // 已排道数下限 = 刚完成的这道（含）→ 不会误删已完成的工序
-      const wanted = Math.max(
-        Number(repeatTotal) || currentStep._seq || 1,
-        currentStep._seq || 1
-      )
-      const target = Math.min(wanted, maxTotal)
-      repeatDelta = target - totalNow
+    // ===== 并行模型：数量累计提交 =====
+    // 同一工序可被多人认领，各自提交根数原子累加到 stepQty[下标]；
+    // 累计达到订单数量 → 标记该工序完成（stepDone），清掉该工序认领并归档流水。
+    // 工单本身不因工序完成而完工——须所有工序完成后，由入库仓管员点「工单已完成」收尾。
+    // currentStepIndex 新语义 = 最后一次提交数量的工序下标（首页/列表「当前工序」展示）
+    const qtyTarget = Number(order.qty) || 0
+    const prevAcc = Number((order.stepQty || {})[idx]) || 0
+    const submittedQty = Number(recordQty) || 0
+    // 部分提交标记：有数量工单且本次提交后累计仍未达标 → 历史记录标记 partial（前端/审计区分「部分完成」）
+    if (qtyTarget > 0 && prevAcc + submittedQty < qtyTarget) historyEntry.partial = true
+    const _cmd = db.command
 
-      if (repeatDelta > 0) {
-        // 追加到当前工序之后（保持精车连续挨在一起）
-        newStepKeys.splice(newStepIndex, 0, ...Array(repeatDelta).fill(currentStep.key))
-      } else if (repeatDelta < 0) {
-        // 回收最后 |repeatDelta| 道未完成的重复工序（只动 newStepIndex 之后的，不碰已完成）
-        let toRemove = -repeatDelta
-        for (let i = newStepKeys.length - 1; i >= newStepIndex && toRemove > 0; i--) {
-          if (newStepKeys[i] === currentStep.key) {
-            newStepKeys.splice(i, 1)
-            toRemove--
-          }
-        }
-      }
+    // 基础更新：历史 + 原子累加 + 当前工序指针。
+    // 条件 stepDone.neq(true)：该工序一旦完成即不可再提交（防完成后重复提交）
+    // 老工单首次并行提交：把顺序指针之前的已完成工序补记 stepDone（一次性迁移）
+    const legacyDoneInit = {}
+    if (!order.stepDone) {
+      for (let i = 0; i < (Number(order.currentStepIndex) || 0); i++) legacyDoneInit[i] = true
     }
-
-    const finalSteps = buildSteps(newStepKeys)
-    const isCompleted = newStepIndex >= finalSteps.length
-
-    // 修复：管理员在暂停状态下完成工序时，需正确处理 paused 标志
-    // - 完成最后一道工序 → status='completed', paused=false（完工工单不能暂停）
-    // - 暂停状态下完成中间工序 → 保持 paused=true, status='paused'（togglePause 逻辑一致）
-    // - 正常完成中间工序 → status='processing', paused=false
-    const newStatus = isCompleted ? 'completed' : (order.paused ? 'paused' : 'processing')
-    const newPaused = isCompleted ? false : order.paused
-
-    // 乐观锁并发保护：仅当 currentStepIndex 未变化时才更新，防止重复完成
-    const updateResult = await db.collection('orders').where({
+    const baseUpdate = await db.collection('orders').where({
       _id: order._id,
-      currentStepIndex: order.currentStepIndex
+      [`stepDone.${idx}`]: _cmd.neq(true)
     }).update({
       data: {
-        currentStepIndex: newStepIndex,
-        stepKeys: newStepKeys,
-        status: newStatus,
-        paused: newPaused,
-        completedDate: isCompleted ? formatTime() : null,
         history: newHistory,
-        // 认领联动：本工序完成流转后清掉该工序的认领（流水归档为 completed，
-        // 在认领人的「我的工单」里自动移到已完成）；其他未来工序的认领保持不变
-        ...(order.activeClaim ? { activeClaim: null } : {}),
-        ...(claimActive ? { [`stepClaims.${curIdx}`]: db.command.remove() } : {}),
+        [`stepQty.${idx}`]: _cmd.inc(submittedQty),
+        currentStepIndex: idx,
+        ...(Object.keys(legacyDoneInit).length ? { stepDone: _cmd.set({ ...legacyDoneInit }) } : {}),
         updatedAt: db.serverDate()
       }
     })
-    if (updateResult.stats.updated === 0) {
-      return { success: false, error: '该工序已被处理，请刷新后重试' }
+    if (baseUpdate.stats.updated === 0) {
+      return { success: false, error: `「${currentStep.name}」已被其他同事提交完成，请刷新后重试` }
     }
 
-    // 乐观锁成功 → 执行实际库存扣减
-    // 【原子保护】使用 where 条件 + inc 一步完成：只有当 stock >= dedQty 时数据库才执行扣减
-    // 数据库引擎层面保证不会扣成负数，无需 check-then-inc 两步，从根本上杜绝并发超扣
+    // 下料工序：原子扣减材料库存（where stock >= dedQty 才执行 inc，杜绝并发超扣），
+    // 扣减失败回滚本次提交（历史 + 累计 + 指针）
     if (inventoryDeduction) {
       const { invId, material, roughness, dedQty } = inventoryDeduction
+      const rollbackSubmission = async () => {
+        try {
+          await db.collection('orders').where({ _id: order._id }).update({
+            data: {
+              history: order.history || [],
+              [`stepQty.${idx}`]: _cmd.inc(-submittedQty),
+              currentStepIndex: Number(order.currentStepIndex) || 0,
+              updatedAt: db.serverDate()
+            }
+          })
+        } catch (rollbackErr) {
+          console.error('[completeStep] 提交回滚失败:', rollbackErr.message)
+        }
+      }
       try {
         const stockPath = `stock.${roughness}`
-        const _ = db.command
-        // 原子扣减：where 条件保证 stock[roughness] >= dedQty 才执行 inc(-dedQty)
         const deductRes = await db.collection('inventory').where({
           _id: invId,
-          [stockPath]: _.gte(dedQty)
+          [stockPath]: _cmd.gte(dedQty)
         }).update({
-          data: {
-            [stockPath]: _.inc(-dedQty),
-            lastUpdatedAt: db.serverDate()
-          }
+          data: { [stockPath]: _cmd.inc(-dedQty), lastUpdatedAt: db.serverDate() }
         })
         if (deductRes.stats.updated === 0) {
-          // 库存不足或被并发占用（可能已被其它请求扣减）→ 回滚工序状态
           let remainStock = 0
           try {
             const invNow = await db.collection('inventory').doc(invId).get()
             const s = Number((invNow.data.stock || {})[roughness])
             remainStock = Number.isFinite(s) ? s : 0
           } catch (e) { /* 忽略 */ }
-          // 乐观锁回滚：仅当 currentStepIndex 还是 newStepIndex 时才回滚，避免覆盖其他人的修改
-          try {
-            await db.collection('orders').where({
-              _id: order._id,
-              currentStepIndex: newStepIndex
-            }).update({
-              data: {
-                currentStepIndex: order.currentStepIndex,
-                // 回滚时同步还原工序列表（本次可能追加/回收了重复工序）
-                stepKeys: oldStepKeys,
-                status: order.status,
-                completedDate: order.completedDate || null,
-                history: order.history || [],
-                // 回滚时还原进行中认领（认领随本工序完成被清掉，失败需还原）
-                // 【坑】目标字段此时刚被主更新置为 null，普通对象写入会报
-                // "Cannot create field in element {activeClaim: null}"，必须 _.set 整体替换
-                activeClaim: order.activeClaim ? db.command.set(order.activeClaim) : null,
-                // 还原本工序的按工序认领（无认领时 remove 清理主更新写入的痕迹）
-                [`stepClaims.${curIdx}`]: claimActive ? db.command.set(activeClaim) : db.command.remove(),
-                updatedAt: db.serverDate()
-              }
-            })
-          } catch (rollbackErr) {
-            console.error('[completeStep] 工序回滚失败:', rollbackErr.message)
-          }
-          return {
-            success: false,
-            error: `${material} φ${roughness} 库存不足（可能被并发占用），当前剩余 ${remainStock.toFixed(4)} 吨`
-          }
+          await rollbackSubmission()
+          return { success: false, error: `${material} φ${roughness} 库存不足（可能被并发占用），当前剩余 ${remainStock.toFixed(4)} 吨` }
         }
         // 异步记录材料出库日志（不阻塞主流程）
         db.collection('material_logs').add({
@@ -538,63 +458,75 @@ exports.main = async (event, context) => {
             qty: dedQty,
             operator: effectiveOperator.name,
             operatorId: effectiveOperator._id,
-            note: `工单 ${orderId} 下料`,
+            note: `工单 ${orderId} ${currentStep.name}`,
             orderId,
             createdAt: db.serverDate()
           }
         }).catch(() => {})
       } catch (err) {
-        // 库存扣减失败 → 回滚工序状态，保证数据一致性
-        console.error('[completeStep] 库存扣减失败，回滚工序:', err.message)
-        try {
-          // 乐观锁回滚：仅当 currentStepIndex 还是 newStepIndex 时才回滚
-          await db.collection('orders').where({
-            _id: order._id,
-            currentStepIndex: newStepIndex
-          }).update({
-            data: {
-              currentStepIndex: order.currentStepIndex,
-              // 回滚时同步还原工序列表（本次可能追加/回收了重复工序）
-              stepKeys: oldStepKeys,
-              status: order.status,
-              completedDate: order.completedDate || null,
-              history: order.history || [],
-              // 回滚时还原进行中认领（认领随本工序完成被清掉，失败需还原）
-              // 【坑】目标字段此时刚被主更新置为 null，普通对象写入会报
-              // "Cannot create field in element {activeClaim: null}"，必须 _.set 整体替换
-              activeClaim: order.activeClaim ? db.command.set(order.activeClaim) : null,
-              // 还原本工序的按工序认领（无认领时 remove 清理主更新写入的痕迹）
-              [`stepClaims.${curIdx}`]: claimActive ? db.command.set(activeClaim) : db.command.remove(),
-              updatedAt: db.serverDate()
-            }
-          })
-        } catch (rollbackErr) {
-          console.error('[completeStep] 工序回滚失败:', rollbackErr.message)
-        }
-        return { success: false, error: `库存扣减失败: ${err.message}，工序已回滚，请重试` }
+        console.error('[completeStep] 库存扣减失败，回滚提交:', err.message)
+        await rollbackSubmission()
+        return { success: false, error: `库存扣减失败: ${err.message}，记录已回滚，请重试` }
       }
     }
 
-    // 认领流水归档为已完成（放在库存扣减成功之后：库存失败回滚时认领仍是进行中）
-    if (claimActive) {
-      // 认领人 ≠ 提交人（管理员/流转工跨认领完成）时记录实际操作人
-      const proxyDone = activeClaim.userId !== user._id
-      await _archiveClaim(activeClaim, {
-        status: 'completed',
-        completedAt: formatTime(),
-        ...(proxyDone ? {
-          completedByName: user.name,
-          completedByRole: isAdmin ? '管理员' : '流转工',
-          completedById: user._id
-        } : {})
+    // 读回最新累计（并发提交后 stepQty 可能大于本地估算，以库内为准）
+    let latestAcc = prevAcc + submittedQty
+    try {
+      const freshRes = await db.collection('orders').doc(order._id).get()
+      const fresh = freshRes.data || {}
+      latestAcc = Number((fresh.stepQty || {})[idx]) || latestAcc
+    } catch (e) { /* 读回失败用本地估算 */ }
+
+    // 完成判定：无数量工单提交一次即完成；有数量工单累计达标即完成
+    const stepJustCompleted = !qtyTarget || latestAcc >= qtyTarget
+
+    // 完成标记：条件更新防并发重复标记；同一更新内清掉本工序认领 + 更新最后提交指针
+    let stepCompletedNow = false
+    if (stepJustCompleted) {
+      const doneUpdate = await db.collection('orders').where({
+        _id: order._id,
+        [`stepDone.${idx}`]: _cmd.neq(true)
+      }).update({
+        data: {
+          [`stepDone.${idx}`]: true,
+          ...(claimActive ? { [`stepClaims.${idx}`]: _cmd.remove() } : {}),
+          ...(order.activeClaim && Number(order.activeClaim.stepIndex) === idx ? { activeClaim: null } : {}),
+          currentStepIndex: idx,
+          updatedAt: db.serverDate()
+        }
       })
+      stepCompletedNow = doneUpdate.stats.updated > 0
+    }
+
+    // 认领流水归档为已完成：本工序全部认领归档，各认领人的「我的工单」同步移到已完成
+    if (stepCompletedNow) {
+      for (const c of claimList) {
+        // 认领人 ≠ 提交人（管理员/流转工跨认领完成）时记录实际操作人
+        const proxyDone = c.userId !== user._id
+        await _archiveClaim(c, {
+          status: 'completed',
+          completedAt: formatTime(),
+          ...(proxyDone ? {
+            completedByName: user.name,
+            completedByRole: isAdmin ? '管理员' : '流转工',
+            completedById: user._id
+          } : {})
+        })
+      }
+      // 兜底：归档提交后新加入的本工序认领流水
+      try {
+        await db.collection('order_claims').where({ orderId, stepIndex: idx, status: 'active' }).update({
+          data: { status: 'completed', completedAt: formatTime() }
+        })
+      } catch (e) { /* 非关键 */ }
     }
 
     // 审计日志（记录实际工序操作员，非提交人）
     try {
       await db.collection('audit_logs').add({
         data: {
-          action: '完成工序',
+          action: stepCompletedNow ? '完成工序' : '部分完成工序',
           targetId: orderId,
           targetName: currentStep.name,
           operatorId: effectiveOperator._id,
@@ -605,45 +537,59 @@ exports.main = async (event, context) => {
             proxy: user._id !== effectiveOperator._id,
             note: note || '',
             qty: recordQty,
+            accumulated: latestAcc,
+            qtyTarget,
+            stepIndex: idx,
             programmerId: effectiveProgrammer ? effectiveProgrammer._id : '',
             programmerName: effectiveProgrammer ? effectiveProgrammer.name : '',
-            partnerRole: effectiveProgrammer ? partnerCfg.label : '',
-            repeatDelta: repeatDelta || 0
+            partnerRole: effectiveProgrammer ? partnerCfg.label : ''
           },
           createdAt: db.serverDate()
         }
       })
     } catch (e) { /* 非关键 */ }
 
-    // 构建 steps 数组供前端使用（含重复工序编号：精车1/精车2...）
-    const updatedSteps = buildSteps(newStepKeys)
-    const nextCurrentStep = updatedSteps[newStepIndex]
-    const updatedOrder = {
-      ...order,
-      stepKeys: newStepKeys,
-      steps: updatedSteps,
-      currentStepIndex: newStepIndex,
-      currentStepName: nextCurrentStep ? nextCurrentStep.name : (isCompleted ? '已完成' : '无工序'),
-      currentStation: nextCurrentStep ? nextCurrentStep.station : (isCompleted ? '入库完成' : ''),
-      status: newStatus,
-      paused: newPaused,
-      completedDate: isCompleted ? formatTime() : null,
-      history: newHistory,
-      // 认领联动：本工序完成后该工序认领已被清空（回滚场景不会走到这里），返回值与库内一致；
-      // 其他未来工序的认领保留在 stepClaims 映射中
-      activeClaim: claimActive ? null : (order.activeClaim || null),
-      stepClaims: (() => {
-        const m = _normalizeStepClaims(order)
-        if (claimActive) delete m[curIdx]
-        return m
-      })(),
-      // 补充前端展示需要的派生字段（保持与 orderManager.enrichOrder 一致）
-      progress: updatedSteps.length > 0 ? Math.min(Math.round((newStepIndex / updatedSteps.length) * 100), 100) : 0,
-      overdue: order.dueDate ? isOverdueAfter({ ...order, status: newStatus }) : false
+    // 返回最新工单（前端刷新用）：从库里读回保证与实际状态一致
+    let freshOrder = null
+    try {
+      const r = await db.collection('orders').doc(order._id).get()
+      freshOrder = r.data || null
+    } catch (e) { /* 读回失败退化为本地拼装 */ }
+
+    let updatedOrder
+    if (freshOrder) {
+      const outSteps = buildSteps(freshOrder.stepKeys || oldStepKeys)
+      const ptr = Number(freshOrder.currentStepIndex) || 0
+      const ptrStep = outSteps[ptr]
+      updatedOrder = {
+        ...freshOrder,
+        steps: outSteps,
+        currentStepName: ptrStep ? ptrStep.name : '',
+        currentStation: ptrStep ? ptrStep.station : '',
+        progress: outSteps.length > 0
+          ? Math.min(Math.round((outSteps.filter((s, i) => !!((freshOrder.stepDone || {})[i]) || (qtyTarget > 0 && (Number((freshOrder.stepQty || {})[i]) || 0) >= qtyTarget)).length / outSteps.length) * 100), 100)
+          : 0,
+        overdue: order.dueDate ? isOverdueAfter(freshOrder) : false
+      }
+    } else {
+      updatedOrder = {
+        ...order,
+        steps,
+        stepQty: { ...(order.stepQty || {}), [idx]: latestAcc },
+        stepDone: { ...(order.stepDone || {}), ...(stepCompletedNow ? { [idx]: true } : {}) },
+        currentStepIndex: idx,
+        currentStepName: currentStep.name,
+        currentStation: currentStep.station,
+        history: newHistory
+      }
     }
 
     return {
       success: true,
+      partial: !stepCompletedNow,
+      accumulated: latestAcc,
+      qtyTarget,
+      remaining: Math.max(qtyTarget - latestAcc, 0),
       order: updatedOrder
     }
   } catch (err) {

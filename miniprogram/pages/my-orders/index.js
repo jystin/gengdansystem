@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const ui = require('../../utils/ui')
+const scan = require('../../utils/scan')
 
 /**
  * 我的工单（认领视图）
@@ -27,15 +28,21 @@ Page({
     try {
       ui.showLoading('加载中...')
       const claims = await api.listClaims('my')
-      const decorate = (c) => ({
-        ...c,
-        _claimedAt: String(c.claimedAt || '').slice(0, 16),
-        _completedAt: String(c.completedAt || '').slice(0, 16),
-        // 预认领的未来工序：流程还没流转到该步 → 显示「等待前置工序」；
-        // 流程已到达 → 可进详情页填写实际数据并完成流转
-        _waiting: !!(c.order && Number(c.order.currentStepIndex) !== Number(c.stepIndex)),
-        _canWork: !!(c.order && Number(c.order.currentStepIndex) === Number(c.stepIndex))
-      })
+      const decorate = (c) => {
+        // 多认领模型：stepClaims[下标] 为认领数组；我的认领已不在列表中 = 被转移/撤销
+        const sc = (c.order && c.order.stepClaims) || {}
+        const live = Array.isArray(sc[c.stepIndex]) ? sc[c.stepIndex] : (sc[c.stepIndex] ? [sc[c.stepIndex]] : [])
+        return {
+          ...c,
+          _claimedAt: String(c.claimedAt || '').slice(0, 16),
+          _completedAt: String(c.completedAt || '').slice(0, 16),
+          // 预认领的未来工序：流程还没流转到该步 → 显示「等待前置工序」；
+          // 流程已到达 → 可进详情页填写实际数据并完成流转
+          _waiting: !!(c.order && Number(c.order.currentStepIndex) !== Number(c.stepIndex)),
+          _canWork: !!(c.order && Number(c.order.currentStepIndex) === Number(c.stepIndex)),
+          _transferred: c.status === 'active' && live.length > 0 && !live.some(x => x.userId === c.userId)
+        }
+      }
       const pending = (claims || []).filter(c => c.status === 'active').map(decorate)
       const done = (claims || []).filter(c => c.status === 'completed').map(decorate)
       this.setData({ pending, done, loading: false })
@@ -59,7 +66,7 @@ Page({
   },
 
   goScan() {
-    wx.navigateTo({ url: '/pages/scan/index' })
+    scan.scanAndOpenOrder()
   },
 
   goToHome() {

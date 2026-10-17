@@ -412,6 +412,11 @@ async function completeCurrentStep(payload) {
   clearCache()
   return callFunction('completeStep', payload)
 }
+/** 确认工单完工（并行模型收尾）：全部工序完成后由入库仓管员/管理员调用 */
+async function finalizeOrder(orderId) {
+  clearCache()
+  return callFunction('orderManager', { action: 'finalizeOrder', orderId })
+}
 async function togglePause(orderId, paused) {
   clearCache()
   return callFunction('orderManager', { action: 'togglePause', orderId, paused })
@@ -427,10 +432,24 @@ function claimOrder(orderId, stepIndex) {
   clearCache()
   return callFunction('orderManager', { action: 'claimOrder', orderId, stepIndex })
 }
-// 撤销认领（认领人本人或管理员）：stepIndex 指定要撤销的工序，缺省撤销当前工序认领
-function releaseClaim(orderId, stepIndex) {
+// 撤销认领（认领人本人或管理员）：stepIndex 指定要撤销的工序；claimId 指定撤销某人的认领（多认领模型），缺省撤自己的
+function releaseClaim(orderId, stepIndex, claimId) {
   clearCache()
-  return callFunction('orderManager', { action: 'releaseClaim', orderId, stepIndex })
+  return callFunction('orderManager', { action: 'releaseClaim', orderId, stepIndex, claimId })
+}
+// 一键完成剩余所有工序：管理员直接执行；流转工提交后需管理员审批（返回 pendingApproval=true）
+function batchComplete(orderId, operatorId, qty, note) {
+  clearCache()
+  return callFunction('orderManager', { action: 'batchComplete', orderId, operatorId, qty, note: note || '' })
+}
+// 待审批的一键完成申请列表（管理员）
+function listBatchApprovals() {
+  return callFunction('orderManager', { action: 'listBatchApprovals' })
+}
+// 审批一键完成申请：approve=true 通过并立即执行；false 拒绝
+function reviewBatchComplete(id, approve) {
+  clearCache()
+  return callFunction('orderManager', { action: 'reviewBatchComplete', id, approve: !!approve })
 }
 // 认领列表：scope='my' 本人（我的工单）；scope='all' 全员（管理员认领视图）
 // 每条带 order 工单概要（状态标签/当前工序/进度等）
@@ -676,6 +695,24 @@ function getEmployeeDisplayStations(emp) {
   return list.filter(s => s !== '管理员中心').join(' / ')
 }
 
+/**
+ * 选择器场景的工种后缀（工序操作员/配合人员选择弹层）：
+ * 管理员/超管直接显示「管理员」；普通员工只显示一个工种——
+ * 优先取与当前工序匹配的（match 为工序岗位名或配合岗关键字），无匹配时取第一个工种。
+ */
+function pickerStationDisplay(emp, match) {
+  if (!emp) return ''
+  if (emp.role === 'admin' || emp.role === 'superadmin') return '管理员'
+  const list = (Array.isArray(emp.stations) ? emp.stations : (emp.station ? [emp.station] : []))
+    .filter(s => s !== '管理员中心')
+  const m = String(match || '').trim()
+  if (m) {
+    const hit = list.find(s => String(s).trim() === m) || list.find(s => String(s).includes(m))
+    if (hit) return hit
+  }
+  return list[0] || ''
+}
+
 // 月度表头（用于产量统计导出）
 // 【优化】按年份缓存，同名年份反复调用不重复构建
 const _monthHeadersCache = Object.create(null)
@@ -804,6 +841,7 @@ module.exports = {
   getRoughnessCoefficient,
   buildMonthHeaders,
   getEmployeeDisplayStations,
+  pickerStationDisplay,
   // 鉴权
   login,
   verify,
@@ -816,11 +854,15 @@ module.exports = {
   getOrder,
   createOrder,
   completeCurrentStep,
+  finalizeOrder,
   togglePause,
   toggleOrderUrgent,
   claimOrder,
   releaseClaim,
   listClaims,
+  batchComplete,
+  listBatchApprovals,
+  reviewBatchComplete,
   revertCompletedStep,
   updateOrderStepKeys,
   updateOrderDrawings,

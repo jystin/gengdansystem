@@ -134,7 +134,7 @@
                   <view class="emp-card-name">{{item.name}}</view>
                   <view class="emp-card-role-badge {{item.role === 'superadmin' ? 'badge-superadmin' : item.role === 'admin' ? 'badge-admin' : item.status === 'pending' ? 'badge-pending' : 'badge-worker'}}">{{item.roleLabel}}</view>
                 </view>
-                <view wx:if="{{item.role !== 'superadmin'}}" class="emp-edit-btn" data-id="{{item.id}}" bindtap="toggleEmpEdit">{{editingEmpId === item.id ? '完成' : '编辑岗位'}}</view>
+                <view wx:if="{{item.role !== 'superadmin' || currentUserRole === 'superadmin'}}" class="emp-edit-btn" data-id="{{item.id}}" bindtap="toggleEmpEdit">{{editingEmpId === item.id ? '完成' : '编辑岗位'}}</view>
               </view>
 
               <!-- 岗位标签展示 -->
@@ -147,8 +147,8 @@
                 <view wx:if="{{(!item.stations || item.stations.length === 0) && item.role !== 'admin'}}" class="emp-stations-empty">未分配岗位</view>
               </view>
 
-              <!-- 岗位编辑模式（checkbox 多选） -->
-              <view wx:if="{{editingEmpId === item.id && item.role !== 'superadmin'}}" class="emp-stations-editor">
+              <!-- 岗位编辑模式（checkbox 多选）：超管本人也允许编辑自己的岗位 -->
+              <view wx:if="{{editingEmpId === item.id && (item.role !== 'superadmin' || currentUserRole === 'superadmin')}}" class="emp-stations-editor">
                 <view class="emp-stations-tip">勾选可分配给该员工的工序岗位：</view>
                 <view class="emp-checkbox-grid">
                   <block wx:for="{{allStations}}" wx:for-item="opt" wx:key="station">
@@ -212,49 +212,67 @@
         </view>
         <view class="prod-mode-tip">{{prodMode === 'program' ? '配合根数 = 该员工以「编程员 / 调字员」身份参与的敦压 / 拉尾子 / 精车 / 铣方头 / 打字工序根数' : '操作根数 = 该员工实际完成工序的根数'}}</view>
 
-        <!-- 单员工月度表格 -->
-        <scroll-view scroll-x class="prod-scroll">
-          <view class="prod-table">
-            <view class="prod-row prod-head">
-              <view class="prod-cell name-cell">月份</view>
-              <view wx:for="{{monthHeaders}}" wx:key="key" class="prod-cell">{{item.label}}</view>
-              <view class="prod-cell total-cell">全年</view>
-            </view>
-            <view class="prod-row">
-              <view class="prod-cell name-cell bold">{{displayStats[selectedProdIndex].employee.name}}</view>
-              <block wx:for="{{displayStats[selectedProdIndex]._monthly}}" wx:key="key">
-                <view class="prod-cell {{item.roots > 0 ? 'has-data' : ''}}">{{item.roots}}</view>
-              </block>
-              <view class="prod-cell total-cell bold">{{displayStats[selectedProdIndex]._total}}</view>
-            </view>
+        <!-- 表格缩放：字号/列宽等比放大，配合左右滚动查看 -->
+        <view class="prod-zoom-bar">
+          <text class="prod-zoom-label">表格放大</text>
+          <view class="prod-zoom-controls">
+            <view class="prod-zoom-btn {{prodZoom <= 1 ? 'disabled' : ''}}" bindtap="onProdZoomOut">－</view>
+            <text class="prod-zoom-val">{{prodZoomLabel}}</text>
+            <view class="prod-zoom-btn {{prodZoom >= 2.5 ? 'disabled' : ''}}" bindtap="onProdZoomIn">＋</view>
+            <view wx:if="{{prodZoom > 1}}" class="prod-zoom-reset" bindtap="onProdZoomReset">重置</view>
           </view>
-        </scroll-view>
-        <view class="prod-mode-tip">本月：{{displayStats[selectedProdIndex]._current || 0}} 根</view>
+        </view>
 
-        <!-- 全部员工汇总表 -->
-        <view class="prod-all-section">
-          <view class="prod-subtitle">全部员工汇总</view>
+        <!-- 单员工月度表格：左侧列固定，右侧月份区横向滚动 -->
+        <view class="prod-table" style="--pz: {{prodZoom}}">
+          <view class="prod-fixed-col">
+            <view class="prod-fixed-cell prod-fixed-head">月份</view>
+            <view class="prod-fixed-cell">{{displayStats[selectedProdIndex].employee.name}}</view>
+          </view>
           <scroll-view scroll-x class="prod-scroll">
-            <view class="prod-table">
+            <view class="prod-months-inner">
               <view class="prod-row prod-head">
-                <view class="prod-cell name-cell">员工</view>
                 <view wx:for="{{monthHeaders}}" wx:key="key" class="prod-cell">{{item.label}}</view>
                 <view class="prod-cell total-cell">全年</view>
               </view>
-              <block wx:for="{{displayStats}}" wx:key="id">
-                <view class="prod-row">
-                  <view class="prod-cell name-cell">
-                    <view class="prod-emp-name">{{item.employee.name}}</view>
-                    <view class="prod-station">{{item.employee._stationDisplay}}</view>
-                  </view>
-                  <block wx:for="{{item._monthly}}" wx:key="key" wx:for-item="m">
-                    <view class="prod-cell {{m.roots > 0 ? 'has-data' : ''}}">{{m.roots}}</view>
-                  </block>
-                  <view class="prod-cell total-cell">{{item._total}}</view>
-                </view>
-              </block>
+              <view class="prod-row">
+                <block wx:for="{{displayStats[selectedProdIndex]._monthly}}" wx:key="key">
+                  <view class="prod-cell {{item.roots > 0 ? 'has-data' : ''}}">{{item.roots}}</view>
+                </block>
+                <view class="prod-cell total-cell">{{displayStats[selectedProdIndex]._total}}</view>
+              </view>
             </view>
           </scroll-view>
+        </view>
+        <view class="prod-mode-tip">本月：{{displayStats[selectedProdIndex]._current || 0}} 根</view>
+
+        <!-- 全部员工汇总表：左侧员工列固定（仅名字），右侧月份区横向滚动 -->
+        <view class="prod-all-section">
+          <view class="prod-subtitle">全部员工汇总</view>
+          <view class="prod-table" style="--pz: {{prodZoom}}">
+            <view class="prod-fixed-col">
+              <view class="prod-fixed-cell prod-fixed-head">员工</view>
+              <view wx:for="{{displayStats}}" wx:key="id" class="prod-fixed-cell">
+                <view class="prod-emp-name">{{item.employee.name}}</view>
+              </view>
+            </view>
+            <scroll-view scroll-x class="prod-scroll">
+              <view class="prod-months-inner">
+                <view class="prod-row prod-head">
+                  <view wx:for="{{monthHeaders}}" wx:key="key" class="prod-cell">{{item.label}}</view>
+                  <view class="prod-cell total-cell">全年</view>
+                </view>
+                <block wx:for="{{displayStats}}" wx:key="id">
+                  <view class="prod-row">
+                    <block wx:for="{{item._monthly}}" wx:for-item="m" wx:key="key">
+                      <view class="prod-cell {{m.roots > 0 ? 'has-data' : ''}}">{{m.roots}}</view>
+                    </block>
+                    <view class="prod-cell total-cell">{{item._total}}</view>
+                  </view>
+                </block>
+              </view>
+            </scroll-view>
+          </view>
         </view>
       </view>
     </view>

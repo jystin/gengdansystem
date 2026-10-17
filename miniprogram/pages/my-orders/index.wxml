@@ -39,7 +39,8 @@
           </view>
           <text class="progress-text">{{item.order.progress}}%</text>
         </view>
-        <view wx:if="{{item.order && item.order.stepClaims && item.order.stepClaims[item.stepIndex] && item.order.stepClaims[item.stepIndex].userId !== item.userId}}" class="subtle warn-text">该工序认领已被管理员转移</view>
+        <!-- 多认领模型：该工序的认领列表里已没有我的记录 = 已被转移/撤销 -->
+        <view wx:if="{{item._transferred}}" class="subtle warn-text">该工序认领已被管理员转移</view>
       </view>
     </block>
     <view wx:if="{{!loading && pending.length === 0}}" class="empty-state card">

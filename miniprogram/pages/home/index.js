@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const ui = require('../../utils/ui')
+const scan = require('../../utils/scan')
 // 【优化】export-excel 是重量级模块（约 13KB），仅在管理员需要导出时才懒加载
 let _exportExcel = null
 function _getExportExcel() {
@@ -31,6 +32,8 @@ Page({
     prodYear: '',
     prodEmployeeNames: [],
     prodMode: 'operate',      // 统计口径：operate=操作根数，program=配合根数（编程员/调字员）
+    prodZoom: 1.5,            // 月度表格缩放倍数（默认 150%，按用户持久化 1~2.5）
+    prodZoomLabel: '150%',    // 缩放比例展示
     displayStats: []          // 按当前口径整理后的展示数据
   },
 
@@ -50,6 +53,7 @@ Page({
     }
     const user = app.globalData.currentUser || { role: 'guest', status: 'guest' }
     this.setData({ user, currentUserRole: user.role || '' })
+    this._initProdZoom(user)
     await this.refresh()
   },
 
@@ -88,7 +92,8 @@ Page({
   },
 
   goScan() {
-    wx.navigateTo({ url: '/pages/scan/index' })
+    // 直接调起相机扫码，不再进入扫码中间页
+    scan.scanAndOpenOrder()
   },
 
   goProfile() {
@@ -383,6 +388,31 @@ Page({
     if (mode === this.data.prodMode) return
     this.setData({ prodMode: mode, selectedProdIndex: 0 })
     this._applyProdMode()
+  },
+
+  // ===== 月度表格缩放（原生页面不支持双指捏合，用按钮步进缩放）=====
+  // 默认 150%；按用户持久化到本地存储，下次登录沿用该员工上一次设置的数值
+  onProdZoomIn() { this._setProdZoom(this.data.prodZoom + 0.25) },
+  onProdZoomOut() { this._setProdZoom(this.data.prodZoom - 0.25) },
+  onProdZoomReset() { this._setProdZoom(1.5) },
+  _initProdZoom(user) {
+    const me = user || (getApp().globalData.currentUser || {})
+    if (!me.id) return
+    try {
+      const saved = Number(wx.getStorageSync('prod_zoom_' + me.id))
+      const z = Math.min(2.5, Math.max(1, saved || 1.5))
+      this.setData({ prodZoom: z, prodZoomLabel: Math.round(z * 100) + '%' })
+    } catch (e) { /* 存储读取失败保持默认 150% */ }
+  },
+  _setProdZoom(z) {
+    const v = Math.min(2.5, Math.max(1, Math.round(z * 100) / 100))
+    if (v === this.data.prodZoom) return
+    this.setData({ prodZoom: v, prodZoomLabel: Math.round(v * 100) + '%' })
+    // 按用户持久化：同一设备多员工各自记住自己的设置
+    try {
+      const me = getApp().globalData.currentUser || {}
+      if (me.id) wx.setStorageSync('prod_zoom_' + me.id, v)
+    } catch (e) { /* 存储异常忽略 */ }
   },
 
   /**

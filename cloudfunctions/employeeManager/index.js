@@ -95,7 +95,8 @@ async function updateStations(employeeId, stations, user) {
 
   if (empRes.data) {
     // 是已激活员工
-    if (empRes.data.role === 'superadmin') throw new Error('不能修改超级管理员')
+    // 超管岗位默认禁改，防止普通管理员误动；但超管本人允许编辑自己的工种
+    if (empRes.data.role === 'superadmin' && user._id !== employeeId) throw new Error('不能修改超级管理员')
 
     await db.collection('users').doc(employeeId).update({
       data: { stations: finalStations, updatedAt: db.serverDate() }

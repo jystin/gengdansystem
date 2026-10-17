@@ -1,4 +1,4 @@
-<view wx:if="{{order}}" class="container page-order-detail {{editingFields ? 'editing-mode' : ''}}">
+<view wx:if="{{order}}" class="container page-order-detail {{editingFields ? 'editing-mode' : ''}} {{elderMode ? 'elder' : ''}}">
   <view class="top-left-home" bindtap="goToHome">
     <text class="home-icon">⌂</text>
   </view>
@@ -75,7 +75,164 @@
       <view class="progress-bar">
         <view class="progress-fill" style="width: {{order.progress}}%"></view>
       </view>
-      <view class="subtle">当前工序：{{order.currentStepName}} · {{order.currentStation}}</view>
+    </view>
+  </view>
+
+
+  <view class="section card action-panel {{panelFlash ? 'panel-flash' : ''}}">
+    <view class="section-title">操作面板</view>
+
+    <!-- 认领区块（并行模型）：进度提示 + 我认领的工序 + 可认领的工序 -->
+    <view wx:if="{{order.status !== 'completed'}}" class="claim-section">
+      <!-- 进度提示：完成道数 + 最新提交的工序 -->
+      <view class="claim-bar mismatch">
+        <view class="claim-info">
+          <text class="claim-main">本单进度：已完成 {{doneCount}}/{{totalSteps}} 道</text>
+          <text class="claim-sub">{{lastSubmitStepName ? '最新提交：' + lastSubmitStepName + ' · ' + lastSubmitStepStation : '各工序暂无提交，直接认领你的岗位工序即可开工'}}</text>
+        </view>
+      </view>
+
+      <!-- 可认领的工序（全部未完成 + 岗位匹配，可多人协作） -->
+      <view wx:if="{{claimableSteps.length > 0}}" class="my-claim-list">
+        <view class="my-claim-title">可认领的工序</view>
+        <view wx:for="{{claimableSteps}}" wx:key="index" class="my-claim-row">
+          <view class="my-claim-info">
+            <text class="my-claim-name">{{item.stepName}}</text>
+            <text class="my-claim-station">{{item.station}}</text>
+          </view>
+          <view class="my-claim-actions">
+            <block wx:if="{{item.has}}">
+              <text class="step-claim-chip {{item.mine ? 'mine' : 'other'}}">{{item.mine ? '✓ 我已认领' : item.names}}</text>
+              <button wx:if="{{item.mine || isAdmin}}" size="mini" class="step-claim-release" catchtap="releaseStepClaim" data-step-index="{{item.index}}" loading="{{claimBtnLoading}}">撤销</button>
+              <button wx:if="{{item.canClaim}}" size="mini" class="step-claim-btn" catchtap="claimStep" data-step-index="{{item.index}}" loading="{{claimBtnLoading}}">＋ 加入认领</button>
+            </block>
+            <button wx:elif="{{item.canClaim}}" size="mini" class="step-claim-btn" catchtap="claimStep" data-step-index="{{item.index}}" loading="{{claimBtnLoading}}">＋ 认领</button>
+          </view>
+        </view>
+      </view>
+
+      <!-- 我认领的工序（点击切换填写目标） -->
+      <view wx:if="{{myClaimSteps.length > 0}}" class="my-claim-list">
+        <view class="my-claim-title">我认领的工序（点击填写）</view>
+        <view class="claim-chip-row">
+          <view wx:for="{{myClaimSteps}}" wx:key="index"
+                class="claim-chip {{selectedStepIdx === item.index ? 'active' : ''}}"
+                data-step-index="{{item.index}}"
+                bindtap="selectPanelStep">
+            <text class="claim-chip-name">{{item.stepName}}</text>
+            <text class="claim-chip-acc">{{item.acc}}/{{qtyTarget}}</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 无可认领也无可填写：全部完成或无匹配工种 -->
+      <view wx:if="{{claimableSteps.length === 0 && myClaimSteps.length === 0 && !canComplete}}" class="claim-bar free">
+        <view class="claim-info">
+          <text class="claim-main">暂无可操作的工序</text>
+          <text class="claim-sub">工序均已完成，或与你的工种不匹配</text>
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{canComplete}}">
+      <!-- 当前填写目标工序（并行模型：在我认领的工序间切换） -->
+      <view class="selected-step-line">
+        <text class="selected-step-name">填写：{{currentStepName}}<text class="selected-step-station">（{{currentStepStation}}）</text></text>
+        <text class="selected-step-acc">累计 {{selectedAcc}}/{{qtyTarget}} 根{{selectedClaimCount > 1 ? ' · ' + selectedClaimCount + ' 人认领' : ''}}</text>
+      </view>
+
+      <!-- 操作员选择（所有工序都需要） -->
+      <view class="form-field">
+        <view class="form-label">工序操作员<text class="required-star">*</text></view>
+        <view class="operator-select" bindtap="showEmployeePicker" data-target="operator">
+          <text class="{{operatorId ? '' : 'placeholder'}}">{{operatorLabel || '请选择操作员'}}</text>
+          <text class="select-arrow">▾</text>
+        </view>
+      </view>
+
+      <!-- 配合人员选择（敦压 / 拉尾子 / 精车 / 铣方头 = 编程员；打字 = 调字员） -->
+      <view wx:if="{{isProgrammerStep}}" class="form-field">
+        <view class="form-label">{{partnerLabel}}<text class="required-star">*</text></view>
+        <view class="operator-select" bindtap="showEmployeePicker" data-target="programmer">
+          <text class="{{programmerId ? '' : 'placeholder'}}">{{programmerId ? programmerLabel : '请选择' + partnerLabel}}</text>
+          <text class="select-arrow">▾</text>
+        </view>
+        <view wx:if="{{programmerFallback}}" class="form-hint warm">系统里还没有{{partnerLabel}}，请到「员工管理」给对应员工分配含「{{partnerKeyword}}」的岗位后再回来填写。</view>
+      </view>
+
+      <!-- 下料工序：需要填写材料消耗 -->
+      <view wx:if="{{isBlankingStep}}">
+        <view class="material-tip">下料工序请填写材料消耗，系统将自动扣减库存</view>
+
+        <view class="form-field">
+          <view class="form-label">材料类型<text class="required-star">*</text></view>
+          <picker mode="selector" range="{{materialTypes}}" bindchange="bindMaterialType">
+            <view class="form-picker">
+              <text class="{{materialConsumption.material ? '' : 'placeholder'}}">{{materialConsumption.material || '请选择材料'}}</text>
+              <text class="select-arrow">▾</text>
+            </view>
+          </picker>
+        </view>
+
+        <view class="form-field">
+          <view class="form-label">粗度（mm）<text class="required-star">*</text></view>
+          <input class="form-input" type="digit" placeholder="0-200，如 80" value="{{materialConsumption.roughness}}" bindinput="bindMaterialRoughness" confirm-type="done" />
+        </view>
+
+        <view class="form-field">
+          <view class="form-label">长度（mm）<text class="required-star">*</text></view>
+          <input class="form-input" type="digit" placeholder="如 120，图纸有值则自动填充" value="{{materialConsumption.length}}" bindinput="bindMaterialLength" confirm-type="done" />
+        </view>
+
+        <view wx:if="{{calcWeightInfo && isAdmin}}" class="calc-weight-card">
+          <view class="calc-weight-title">材料消耗量计算</view>
+          <view class="calc-weight-row"><text class="calc-label">粗度系数</text><text class="calc-value">{{calcWeightInfo.coef}} kg/m</text></view>
+          <view class="calc-weight-row"><text class="calc-label">单根重量</text><text class="calc-value highlight">{{calcWeightInfo.singleWeightKg}} kg</text></view>
+          <view class="calc-weight-row"><text class="calc-label">总消耗量</text><text class="calc-value highlight strong">{{calcWeightInfo.totalTons}} 吨</text></view>
+          <view class="calc-divider"></view>
+          <view class="calc-weight-row"><text class="calc-label">当前库存</text><text class="calc-value">{{calcWeightInfo.currentStock}} 吨</text></view>
+          <view class="calc-weight-row"><text class="calc-label">剩余库存</text><text class="calc-value {{Number(calcWeightInfo.remainStock) >= 0 ? 'highlight' : 'danger'}} strong">{{calcWeightInfo.remainStock}} 吨</text></view>
+        </view>
+
+        <view class="form-field">
+          <view class="form-label">消耗数量（根）<text class="required-star">*</text></view>
+          <input class="form-input" type="number" placeholder="请输入本次消耗数量" value="{{materialConsumption.qty}}" bindinput="bindMaterialQty" confirm-type="done" />
+        </view>
+      </view>
+
+      <!-- 其他工序 -->
+      <view wx:else>
+        <view class="form-field">
+          <view class="form-label">实际处理根数<text class="required-star">*</text></view>
+          <input class="form-input" type="digit" placeholder="请输入实际处理根数" value="{{completedQty}}" bindinput="onQtyInput" bindblur="onQtyBlur" confirm-type="done" cursor-spacing="20" />
+        </view>
+      </view>
+    </view>
+
+    <!-- 一键完成剩余工序（仅管理员/流转工）：剩余多于 1 道时显示 -->
+    <view wx:if="{{(isAdmin || isFloater) && canComplete && batchRemaining > 1 && order.status !== 'completed'}}" class="batch-section">
+      <button class="batch-toggle" bindtap="toggleBatchForm">一键完成</button>
+      <view wx:if="{{batchOpen}}" class="batch-form">
+        <view class="form-label">工序操作员<text class="required-star">*</text></view>
+        <view class="operator-select" bindtap="showEmployeePicker" data-target="operator">
+          <text class="{{operatorId ? '' : 'placeholder'}}">{{operatorLabel || '请选择操作员'}}</text>
+          <text class="select-arrow">▾</text>
+        </view>
+        <view class="form-label" style="margin-top: 16rpx;">每道工序根数<text class="required-star">*</text></view>
+        <input class="form-input" type="number" placeholder="每道工序完成多少根" value="{{batchQty}}" bindinput="onBatchQtyInput" />
+        <button class="primary-btn" style="margin-top: 12rpx;" bindtap="submitBatchComplete" loading="{{batchSubmitting}}">确定一键完成</button>
+      </view>
+    </view>
+
+    <view class="action-row">
+      <button class="primary-btn" bindtap="completeStep" disabled="{{!canComplete || order.status === 'completed'}}">完成</button>
+      <button wx:if="{{isAdmin && order.status !== 'completed'}}" class="secondary-btn {{order.urgent ? 'urgent-btn' : ''}}" bindtap="toggleUrgent">{{order.urgent ? '取消加急' : '设为加急'}}</button>
+      <button wx:if="{{isAdmin && order.status !== 'completed'}}" class="secondary-btn" bindtap="togglePause">{{order.paused ? '恢复工单' : '暂停工单'}}</button>
+    </view>
+
+    <!-- 完工确认（并行模型收尾）：所有工序完成并提交根数后，入库仓管员/管理员确认 -->
+    <view wx:if="{{canFinalize}}" class="action-row">
+      <button class="primary-btn finalize-btn" bindtap="finalizeOrderConfirm" loading="{{finalizing}}">工单已完成</button>
     </view>
   </view>
 
@@ -126,7 +283,7 @@
 
     <block wx:else>
       <block wx:for="{{order.steps}}" wx:key="_stepKey">
-        <view class="step-item {{index < order.currentStepIndex ? 'done' : index === order.currentStepIndex ? 'current' : ''}}">
+        <view class="step-item {{stepClaimFlags[index].done ? 'done' : (index === order.currentStepIndex && !stepClaimFlags[index].done ? 'current' : '')}}">
           <view class="step-dot"></view>
           <view class="step-body">
             <view class="row">
@@ -135,17 +292,22 @@
                 <text wx:if="{{item.needProgrammer}}" class="step-tag">需{{item.partnerLabel || '编程员'}}</text>
               </view>
               <text class="subtle">{{item.station}}</text>
-              <button wx:if="{{isAdmin && index < order.currentStepIndex}}" class="step-revert-btn" bindtap="revertStep" data-step-key="{{item.key}}" data-step-index="{{index}}">撤回</button>
+              <button wx:if="{{isAdmin && stepClaimFlags[index].done}}" class="step-revert-btn" bindtap="revertStep" data-step-key="{{item.key}}" data-step-index="{{index}}">撤回</button>
             </view>
-            <view class="subtle" wx:if="{{index < order.history.length}}">{{order.history[index].operator}} - {{order.history[index].completedAt}}{{order.history[index].qty ? ' - ' + order.history[index].qty + '根' : ''}}{{order.history[index].programmerName ? ' - ' + (order.history[index].partnerRole || '编程员') + ' ' + order.history[index].programmerName : ''}}</view>
-            <view class="subtle" wx:else>等待处理</view>
-            <!-- 未来工序的认领入口：可预先认领符合自己岗位的工序，不必等前面步骤完成 -->
-            <view wx:if="{{index > order.currentStepIndex && stepClaimFlags[index] && (stepClaimFlags[index].has || stepClaimFlags[index].canClaim)}}" class="step-claim-row">
-              <block wx:if="{{stepClaimFlags[index].has}}">
-                <text class="step-claim-chip {{stepClaimFlags[index].mine ? 'mine' : 'other'}}">{{stepClaimFlags[index].mine ? '✓ 我已认领' : stepClaimFlags[index].userName}}</text>
-                <button wx:if="{{stepClaimFlags[index].mine || isAdmin}}" size="mini" class="step-claim-release" catchtap="releaseStepClaim" data-step-index="{{index}}" loading="{{claimBtnLoading}}">撤销</button>
-              </block>
-              <button wx:elif="{{stepClaimFlags[index].canClaim}}" size="mini" class="step-claim-btn" catchtap="claimStep" data-step-index="{{index}}" loading="{{claimBtnLoading}}">认领</button>
+            <block wx:if="{{stepRecordLines[index] && stepRecordLines[index].length > 0}}">
+              <view class="subtle" wx:for="{{stepRecordLines[index]}}" wx:for-item="rec" wx:key="completedAt">{{rec.operator}} - {{rec.completedAt}}{{rec.qty ? ' - ' + rec.qty + '根' : ''}}{{rec.partial ? '（部分）' : ''}}{{rec.programmerName ? ' - ' + (rec.partnerRole || '编程员') + ' ' + rec.programmerName : ''}}</view>
+            </block>
+            <!-- 工序汇总：完成状态 + 累计根数 + 认领人数 -->
+            <view class="step-summary {{stepClaimFlags[index].done ? 'done' : (stepClaimFlags[index].acc > 0 ? 'doing' : '')}}">
+              <text wx:if="{{stepClaimFlags[index].done}}">✓ 已完成 · 累计 {{stepClaimFlags[index].acc}}/{{stepClaimFlags[index].qty}} 根</text>
+              <text wx:elif="{{stepClaimFlags[index].acc > 0}}">进行中 · 累计 {{stepClaimFlags[index].acc}}/{{stepClaimFlags[index].qty}} 根{{stepClaimFlags[index].has ? ' · ' + stepClaimFlags[index].count + '人认领' : ''}}</text>
+              <text wx:elif="{{stepClaimFlags[index].has}}">已认领 {{stepClaimFlags[index].count}} 人 · 待提交根数</text>
+              <text wx:else>等待处理</text>
+            </view>
+            <!-- 认领管理：仅显示认领人与撤销；认领入口统一在上方操作面板「可认领的工序」 -->
+            <view wx:if="{{stepClaimFlags[index] && stepClaimFlags[index].has}}" class="step-claim-row">
+              <text class="step-claim-chip {{stepClaimFlags[index].mine ? 'mine' : 'other'}}">{{stepClaimFlags[index].mine ? '✓ 我已认领' : stepClaimFlags[index].names}}</text>
+              <button wx:if="{{stepClaimFlags[index].mine || isAdmin}}" size="mini" class="step-claim-release" catchtap="releaseStepClaim" data-step-index="{{index}}" loading="{{claimBtnLoading}}">撤销</button>
             </view>
           </view>
         </view>
@@ -238,7 +400,12 @@
   </view>
 
   <view class="section card">
-    <view class="section-title">订单二维码</view>
+    <!-- 二维码默认折叠：下拉页面到底部或点标题展开 -->
+    <view class="section-title-row qr-toggle" bindtap="toggleQrSection">
+      <view class="section-title">订单二维码{{qrExpanded ? '' : '（已折叠，下拉页面或点此展开）'}}</view>
+      <text class="qr-toggle-arrow {{qrExpanded ? 'open' : ''}}">▾</text>
+    </view>
+    <block wx:if="{{qrExpanded}}">
     <view class="subtle">二维码内容绑定工单号：{{order.qrContent || order.id}}</view>
     <view class="qr-tip {{isDevtools ? 'qr-tip-warn' : ''}}">
       <block wx:if="{{isDevtools}}">开发者工具无法模拟「另存为」对话框（官方限制，非小程序代码问题）。请用<text class="qr-tip-strong">电脑版微信</text>打开本小程序验证。当前环境点「另存为…」会改为复制图片链接，贴到浏览器即可下载。</block>
@@ -285,139 +452,9 @@
     <button wx:if="{{isAdmin}}" class="secondary-btn" style="margin-top:12rpx" bindtap="regenerateWxacode" loading="{{qrRegenerating}}">
       {{qrRegenerating ? '生成中...' : (order.qrCodeFileID ? '重新生成小程序码' : '点击生成微信小程序码')}}
     </button>
+    </block>
   </view>
 
-  <view class="section card action-panel">
-    <view class="section-title">操作面板</view>
-
-    <!-- 认领区块：仅未完工工单显示（当前工序认领；未来工序在工序流转列表里认领） -->
-    <view wx:if="{{order.status !== 'completed'}}" class="claim-section">
-      <!-- 我已认领 -->
-      <view wx:if="{{claimState === 'mine'}}" class="claim-bar mine">
-        <view class="claim-info">
-          <text class="claim-main">✓ 我已认领「{{currentClaim.stepName}}」</text>
-          <text class="claim-sub">轮到该工序时即可填写实际数据并完成流转</text>
-        </view>
-        <button size="mini" class="claim-mini-btn" bindtap="releaseCurrentClaim" loading="{{claimBtnLoading}}">取消认领</button>
-      </view>
-      <!-- 他人认领中 -->
-      <view wx:elif="{{claimState === 'other'}}" class="claim-bar other">
-        <view class="claim-info">
-          <text class="claim-main">{{currentClaim.userName}} 已认领「{{currentClaim.stepName}}」</text>
-          <text class="claim-sub">其完成流转前，其他员工不能认领该工序</text>
-        </view>
-        <button wx:if="{{isAdmin}}" size="mini" class="claim-mini-btn warn" bindtap="releaseCurrentClaim" loading="{{claimBtnLoading}}">撤销认领</button>
-      </view>
-      <!-- 无人认领 & 我可认领 -->
-      <view wx:elif="{{canClaim}}" class="claim-bar free">
-        <view class="claim-info">
-          <text class="claim-main">当前工序：{{currentStepName}} · {{currentStepStation}}</text>
-          <text class="claim-sub">认领后进入「我的工单」，其他员工需等您完成流转</text>
-        </view>
-        <button size="mini" class="claim-mini-btn primary" bindtap="claimCurrentStep" loading="{{claimBtnLoading}}">认领此工序</button>
-      </view>
-    </view>
-
-    <view wx:if="{{canComplete}}" class="subtle admin-tip">{{isAdmin ? '管理员可直接点击已完成，系统会自动流转到下一工序。' : (isFloater ? '您是流转工，可填写并完成流转任意工序。' : '当前工序已分配给您，请确认完成后点击流转。')}}</view>
-    <view wx:elif="{{order.status !== 'completed'}}" class="subtle no-permission-tip">您无权操作当前工序，请等待{{order.currentStation}}处理。</view>
-
-    <view wx:if="{{canComplete}}">
-      <!-- 操作员选择（所有工序都需要） -->
-      <view class="form-field">
-        <view class="form-label">工序操作员<text class="required-star">*</text><text class="form-label-tip">仅限{{currentStepStation || '对应岗位'}}、流转工或管理员</text></view>
-        <view class="operator-select" bindtap="showEmployeePicker" data-target="operator">
-          <text class="{{operatorId ? '' : 'placeholder'}}">{{operatorLabel}}</text>
-          <text class="select-arrow">▾</text>
-        </view>
-      </view>
-
-      <!-- 配合人员选择（敦压 / 拉尾子 / 精车 / 铣方头 = 编程员；打字 = 调字员） -->
-      <view wx:if="{{isProgrammerStep}}" class="form-field">
-        <view class="form-label">{{partnerLabel}}<text class="required-star">*</text><text class="form-label-tip">本工序需要{{partnerLabel}}配合</text></view>
-        <view class="operator-select" bindtap="showEmployeePicker" data-target="programmer">
-          <text class="{{programmerId ? '' : 'placeholder'}}">{{programmerId ? programmerLabel : '请选择' + partnerLabel}}</text>
-          <text class="select-arrow">▾</text>
-        </view>
-        <view wx:if="{{programmerFallback}}" class="form-hint warm">系统里还没有{{partnerLabel}}，请到「员工管理」给对应员工分配含「{{partnerKeyword}}」的岗位后再回来填写。</view>
-      </view>
-
-      <!-- 可重复工序（精车1~4）：本工单共需几道 -->
-      <view wx:if="{{isRepeatableStep}}" class="form-field">
-        <view class="form-label">本工单共需几道精车<text class="form-label-tip">做完当前这道会自动排上后面几道</text></view>
-        <view class="repeat-options">
-          <view wx:for="{{repeatOptions}}" wx:key="value"
-                class="repeat-option {{repeatTotalChoice === item.value ? 'active' : ''}}"
-                data-value="{{item.value}}"
-                bindtap="onRepeatTotalChange">{{item.label}}</view>
-        </view>
-        <view class="form-hint">不确定就先按默认，后面每做完一道都还能再加（最多 4 道）。</view>
-      </view>
-
-      <!-- 下料工序：需要填写材料消耗 -->
-      <view wx:if="{{isBlankingStep}}">
-        <view class="material-tip">下料工序请填写材料消耗，系统将自动扣减库存</view>
-
-        <view class="form-field">
-          <view class="form-label">材料类型<text class="required-star">*</text></view>
-          <picker mode="selector" range="{{materialTypes}}" bindchange="bindMaterialType">
-            <view class="form-picker">
-              <text class="{{materialConsumption.material ? '' : 'placeholder'}}">{{materialConsumption.material || '请选择材料'}}</text>
-              <text class="select-arrow">▾</text>
-            </view>
-          </picker>
-        </view>
-
-        <view class="form-field">
-          <view class="form-label">粗度（mm）<text class="required-star">*</text></view>
-          <input class="form-input" type="digit" placeholder="0-200，如 80" value="{{materialConsumption.roughness}}" bindinput="bindMaterialRoughness" confirm-type="done" />
-        </view>
-
-        <view class="form-field">
-          <view class="form-label">长度（mm）<text class="required-star">*</text></view>
-          <input class="form-input" type="digit" placeholder="如 120，图纸有值则自动填充" value="{{materialConsumption.length}}" bindinput="bindMaterialLength" confirm-type="done" />
-        </view>
-
-        <view wx:if="{{calcWeightInfo && isAdmin}}" class="calc-weight-card">
-          <view class="calc-weight-title">材料消耗量计算</view>
-          <view class="calc-weight-row"><text class="calc-label">粗度系数</text><text class="calc-value">{{calcWeightInfo.coef}} kg/m</text></view>
-          <view class="calc-weight-row"><text class="calc-label">单根重量</text><text class="calc-value highlight">{{calcWeightInfo.singleWeightKg}} kg</text></view>
-          <view class="calc-weight-row"><text class="calc-label">总消耗量</text><text class="calc-value highlight strong">{{calcWeightInfo.totalTons}} 吨</text></view>
-          <view class="calc-divider"></view>
-          <view class="calc-weight-row"><text class="calc-label">当前库存</text><text class="calc-value">{{calcWeightInfo.currentStock}} 吨</text></view>
-          <view class="calc-weight-row"><text class="calc-label">剩余库存</text><text class="calc-value {{Number(calcWeightInfo.remainStock) >= 0 ? 'highlight' : 'danger'}} strong">{{calcWeightInfo.remainStock}} 吨</text></view>
-        </view>
-
-        <view class="form-field">
-          <view class="form-label">消耗数量（根）<text class="required-star">*</text></view>
-          <input class="form-input" type="number" placeholder="请输入本次消耗数量" value="{{materialConsumption.qty}}" bindinput="bindMaterialQty" confirm-type="done" />
-        </view>
-
-        <view class="form-field">
-          <view class="form-label">备注 / 异常说明</view>
-          <textarea class="form-textarea" placeholder="选填" value="{{note}}" bindinput="onNoteInput" bindblur="onNoteBlur" auto-height maxlength="200" />
-        </view>
-      </view>
-
-      <!-- 其他工序 -->
-      <view wx:else>
-        <view class="form-field">
-          <view class="form-label">实际处理根数<text class="required-star">*</text></view>
-          <input class="form-input" type="digit" placeholder="请输入实际处理根数" value="{{completedQty}}" bindinput="onQtyInput" bindblur="onQtyBlur" confirm-type="done" cursor-spacing="20" />
-        </view>
-
-        <view class="form-field">
-          <view class="form-label">备注 / 异常说明</view>
-          <textarea class="form-textarea" placeholder="选填" value="{{note}}" bindinput="onNoteInput" bindblur="onNoteBlur" auto-height maxlength="200" />
-        </view>
-      </view>
-    </view>
-
-    <view class="action-row">
-      <button class="primary-btn" bindtap="completeStep" disabled="{{!canComplete || order.status === 'completed'}}">已完成并流转</button>
-      <button wx:if="{{isAdmin && order.status !== 'completed'}}" class="secondary-btn {{order.urgent ? 'urgent-btn' : ''}}" bindtap="toggleUrgent">{{order.urgent ? '取消加急' : '设为加急'}}</button>
-      <button wx:if="{{isAdmin && order.status !== 'completed'}}" class="secondary-btn" bindtap="togglePause">{{order.paused ? '恢复工单' : '暂停工单'}}</button>
-    </view>
-  </view>
 
   <view class="section card">
     <view class="section-title">全流程记录</view>
@@ -447,16 +484,9 @@
       <text class="op-picker-title">{{pickerTarget === 'programmer' ? '选择' + partnerLabel : '选择操作员'}}</text>
       <text class="op-picker-close" bindtap="hideEmployeePicker">✕</text>
     </view>
-    <input class="op-search-input"
-           placeholder="{{pickerTarget === 'programmer' ? '搜索' + partnerLabel + '姓名或岗位...' : '搜索姓名或岗位...'}}"
-           value="{{pickerKeyword}}"
-           bindinput="onPickerSearchInput"
-           confirm-type="search"
-           focus />
     <scroll-view scroll-y class="op-employee-list">
       <block wx:for="{{pickerList}}" wx:key="id">
-        <view wx:if="{{!pickerKeyword || item.name.indexOf(pickerKeyword) !== -1 || (item._stationDisplay && item._stationDisplay.indexOf(pickerKeyword) !== -1)}}"
-              class="op-employee-item {{pickerTarget === 'programmer' ? (programmerId === item.id ? 'selected' : '') : (operatorId === item.id ? 'selected' : '')}}"
+        <view class="op-employee-item {{pickerTarget === 'programmer' ? (programmerId === item.id ? 'selected' : '') : (operatorId === item.id ? 'selected' : '')}}"
               data-id="{{item.id}}"
               bindtap="selectEmployee">
           <view class="op-emp-name">{{item.name}}</view>

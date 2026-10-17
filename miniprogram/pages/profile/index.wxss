@@ -183,3 +183,166 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ===== 大字模式开关 ===== */
+.elder-switch {
+  margin-top: 18rpx;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.switch-tip {
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.65);
+  margin-top: 4rpx;
+}
+
+/* ===== 超管工具：一键切换身份 + 编辑岗位 ===== */
+.super-tools-row {
+  display: flex;
+  gap: 16rpx;
+}
+
+.tool-btn {
+  flex: 1;
+  margin: 0;
+  padding: 20rpx 0;
+  border-radius: 16rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  line-height: 1.2;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+}
+
+.tool-btn::after {
+  border: none;
+}
+
+.tool-btn-back {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
+
+.tool-btn-station {
+  background: linear-gradient(135deg, #0f766e 0%, #0d5f58 100%);
+}
+
+/* ===== 编辑岗位弹窗 ===== */
+.modal-mask {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40rpx;
+}
+
+.modal-panel {
+  width: 100%;
+  max-width: 640rpx;
+  background: #ffffff;
+  border-radius: 24rpx;
+  padding: 32rpx 28rpx;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.modal-sub {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: #64748b;
+}
+
+.emp-chips {
+  margin-top: 20rpx;
+  white-space: nowrap;
+}
+
+.emp-chips-inner {
+  display: inline-flex;
+  gap: 14rpx;
+  padding-bottom: 6rpx;
+}
+
+.emp-chip {
+  flex-shrink: 0;
+  padding: 14rpx 26rpx;
+  border-radius: 999rpx;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 26rpx;
+  border: 2rpx solid transparent;
+}
+
+.emp-chip.active {
+  background: #e0f2f1;
+  border-color: #0f766e;
+  color: #0f766e;
+  font-weight: 600;
+}
+
+.station-grid {
+  margin-top: 22rpx;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14rpx;
+  overflow-y: auto;
+}
+
+.station-cell {
+  padding: 20rpx 8rpx;
+  border-radius: 14rpx;
+  background: #f8fafc;
+  border: 2rpx solid #e2e8f0;
+  color: #334155;
+  font-size: 26rpx;
+  text-align: center;
+}
+
+.station-cell.checked {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 26rpx;
+}
+
+.modal-btn {
+  flex: 1;
+  margin: 0;
+  border-radius: 16rpx;
+  font-size: 28rpx;
+  line-height: 2.3;
+}
+
+.modal-btn::after {
+  border: none;
+}
+
+.modal-btn.ghost {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.modal-btn.primary {
+  background: #0f766e;
+  color: #ffffff;
+}

@@ -271,6 +271,20 @@ App({
   },
 
   /**
+   * 超管演示视角覆盖：若处于「切换员工视角」状态（本地缓存存有超管身份备份），
+   * 登录/权限同步把 currentUser 刷回数据库身份后，重新降级为普通员工视角。
+   * 仅影响前端展示角色，不改数据库；只有「切换员工视角/切回超管身份」按钮能改变该状态。
+   * @param {Object|null} user 数据库同步回来的用户
+   * @returns {Object|null} 应用视角覆盖后的用户
+   */
+  _applySuperDisguise(user) {
+    if (!user || user.role !== 'superadmin') return user
+    const backup = wx.getStorageSync('superIdentityBackup')
+    if (!backup || backup.role !== 'superadmin' || backup.id !== user.id) return user
+    return { ...user, role: 'worker' }
+  },
+
+  /**
    * 同步访问上下文：调用 auth/login 拉取用户状态
    */
   async syncAccessContext() {
@@ -289,7 +303,8 @@ App({
             user.name = '江鑫（超管）'
           }
         }
-        this.globalData.currentUser = user
+        // 重新应用「切换员工视角」的演示身份降级（防止同步把身份刷回超管）
+        this.globalData.currentUser = this._applySuperDisguise(user)
         this.globalData.accessState = res.state
         if (res.token) {
           this.globalData.token = res.token
@@ -406,7 +421,7 @@ App({
 
       // 其他状态变化：直接同步全局状态
       if (res.user) {
-        this.globalData.currentUser = res.user
+        this.globalData.currentUser = this._applySuperDisguise(res.user)
       }
       this.globalData.accessState = newState
     } catch (e) {

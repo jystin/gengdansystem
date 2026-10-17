@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const ui = require('../../utils/ui')
+const scan = require('../../utils/scan')
 const { exportOrders } = require('../../utils/export-excel')
 
 const CATEGORY_OPTIONS = [
@@ -34,6 +35,9 @@ Page({
     showDatePicker: false,
     dateStart: '',
     dateEnd: '',
+    // 一键完成审批（管理员）
+    batchApprovals: [],
+    showBatchModal: false,
     showCustomerPicker: false,
     customerOptions: [],
     selectedCustomerIndex: 0,
@@ -88,6 +92,12 @@ Page({
         api.listOrders(1, pageSize),
         isAdmin ? api.listClaims('all').catch(() => []) : Promise.resolve([])
       ])
+      // 管理员：拉取一键完成待审批数量（不阻塞主列表）
+      if (isAdmin) {
+        api.listBatchApprovals().then((res) => {
+          this.setData({ batchApprovals: Array.isArray(res && res.approvals) ? res.approvals : [] })
+        }).catch(() => {})
+      }
       this.setData({
         page: 1,
         pageSize,
@@ -119,11 +129,11 @@ Page({
         .map(c => ({
           ...c.order,
           // 已被撤销的进行中快照（管理员撤销后 stepClaims 对应键被清除，但流水还在 active 状态的边界）
-          // 保守处理：认领中视图只显示工单 stepClaims 与流水一致的记录
+          // 保守处理：认领中视图只显示工单 stepClaims 与流水一致的记录（多认领值为数组）
           _claimStale: wantStatus === 'active' && (() => {
             const sc = (c.order && c.order.stepClaims) || {}
-            const live = sc[c.stepIndex]
-            return !live || live.userId !== c.userId
+            const live = Array.isArray(sc[c.stepIndex]) ? sc[c.stepIndex] : (sc[c.stepIndex] ? [sc[c.stepIndex]] : [])
+            return !live.some(x => x.claimId === c.claimId || x.userId === c.userId)
           })(),
           _claim: c,
           _claimTime: String(wantStatus === 'active' ? c.claimedAt : (c.completedAt || c.claimedAt)).slice(0, 16),
@@ -188,17 +198,61 @@ Page({
     return all
   },
 
+  // ===== 一键完成审批（管理员）=====
+  async openBatchModal() {
+    try {
+      ui.showLoading('加载中...')
+      const res = await api.listBatchApprovals()
+      ui.hideLoading()
+      this.setData({ batchApprovals: Array.isArray(res && res.approvals) ? res.approvals : [], showBatchModal: true })
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '加载审批列表失败')
+    }
+  },
+
+  closeBatchModal() {
+    this.setData({ showBatchModal: false })
+  },
+
+  stopBatchBubble() { /* 阻止冒泡关闭弹窗 */ },
+
+  async reviewBatch(event) {
+    const { id, approve } = event.currentTarget.dataset
+    const ok = await ui.confirm(
+      approve ? '确定通过该一键完成申请吗？通过后工单将立即完成所有剩余工序。' : '确定拒绝该一键完成申请吗？',
+      approve ? '通过审批' : '拒绝申请',
+      { confirmColor: approve ? '#0f766e' : '#b91c1c', modalTimeout: 5000, fallbackOnTimeout: true }
+    )
+    if (!ok) return
+    try {
+      ui.showLoading('处理中...')
+      await api.reviewBatchComplete(id, approve)
+      ui.hideLoading()
+      ui.toast(approve ? '已通过，工单已完工' : '已拒绝', 'success')
+      const res = await api.listBatchApprovals().catch(() => null)
+      this.setData({ batchApprovals: Array.isArray(res && res.approvals) ? res.approvals : [] })
+      await this.refresh()
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '审批操作失败')
+    }
+  },
+
   _buildFiltered(orders) {
     const { selectedSet } = this.data
     return this.applyFilter(this.data.keyword, orders, this.data.activeCategory).map((o) => {
       // 未开始工单:可一键删除(没产量/库存影响);后端 categoryLabel 已是互斥正确中文
       const isNotStarted = this._isNotStarted(o)
-      // 按工序认领：一张工单可能同时有多道工序被认领，列表卡片逐条提示
+      // 按工序认领（多认领模型）：一张工单可能同时有多道工序被认领，列表卡片逐条提示
       const stepClaims = o.stepClaims || {}
       const claimHints = Object.keys(stepClaims)
-        .map(k => stepClaims[k])
+        .reduce((arr, k) => {
+          const v = stepClaims[k]
+          return arr.concat(Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []))
+        }, [])
         .filter(c => c && c.userName)
-        .map(c => ({ userName: c.userName, stepName: c.stepName || '' }))
+        .map(c => ({ key: c.claimId || `${c.userName}_${c.stepName}`, userName: c.userName, stepName: c.stepName || '' }))
       return {
         ...o,
         _checked: !!selectedSet[o.id],
@@ -570,7 +624,8 @@ Page({
     if (!ok) return
     try {
       ui.showLoading('撤销中...')
-      await api.releaseClaim(id, Number.isInteger(stepIndex) ? stepIndex : undefined)
+      // 传 claimId 精确撤销弹窗里确认的那条认领（多人认领同一工序时避免撤错人）
+      await api.releaseClaim(id, Number.isInteger(stepIndex) ? stepIndex : undefined, claim.claimId)
       ui.hideLoading()
       ui.toast('已撤销认领', 'success')
       await this.refresh()
@@ -585,6 +640,6 @@ Page({
   },
 
   openScan() {
-    wx.navigateTo({ url: '/pages/scan/index' })
+    scan.scanAndOpenOrder()
   }
 })

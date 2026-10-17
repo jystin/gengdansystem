@@ -146,14 +146,21 @@ function isOverdue(order) {
   return order.dueDate < today
 }
 
+// 是否已开工：并行模型下 currentStepIndex = 最后提交的工序下标，
+// 兼容「只提交过工序 0」的场景（指针仍为 0 但 history 已有记录）
+function hasOrderStarted(order) {
+  if ((order.currentStepIndex || 0) > 0) return true
+  return Array.isArray(order.history) && order.history.length > 0
+}
+
 function getOrderStatusLabel(order) {
   if (order.status === 'completed') return '已完工'
-  // 已暂停:仅"开始后暂停"的工单(已开工 currentStepIndex>0 才算真正暂停;未开工的不算)
-  if (order.paused && (order.currentStepIndex || 0) > 0) return '已暂停'
+  // 已暂停:仅"开始后暂停"的工单(已开工才算真正暂停;未开工的不算)
+  if (order.paused && hasOrderStarted(order)) return '已暂停'
   // 已逾期优先级高于"未开始":只要未完成且超时间 = 逾期
   if (isOverdue(order)) return '已逾期'
-  // 未开始:currentStepIndex=0 且 history 空(且未逾期)
-  if ((order.currentStepIndex || 0) === 0 && (!Array.isArray(order.history) || order.history.length === 0)) return '未开始'
+  // 未开始:从未有提交记录(且未逾期)
+  if (!hasOrderStarted(order)) return '未开始'
   // 加急:仅在"已开始 + 未暂停 + 未逾期"时显示加急 chip
   if (order.urgent) return '加急'
   return '生产中'
@@ -161,30 +168,59 @@ function getOrderStatusLabel(order) {
 
 function getOrderCategory(order) {
   if (order.status === 'completed') return 'completed'
-  if (order.paused && (order.currentStepIndex || 0) > 0) return 'paused'
+  if (order.paused && hasOrderStarted(order)) return 'paused'
   if (isOverdue(order)) return 'overdue'
-  if ((order.currentStepIndex || 0) === 0 && (!Array.isArray(order.history) || order.history.length === 0)) return 'notStarted'
+  if (!hasOrderStarted(order)) return 'notStarted'
   return 'processing'
 }
 
 /**
- * 归一化认领映射：{ [stepIndex]: claim }
- * 兼容旧单认领模型（activeClaim 单字段）：legacy 认领并入映射一起返回；
- * 新模型 stepClaims 为 { 下标: 认领对象 } 映射，值可能为 null（释放后残留）需跳过
+ * 归一化认领映射：{ [stepIndex]: claim[] }（多认领模型，一道工序可被多人认领）
+ * 兼容两种旧数据：activeClaim 单字段懒迁移；stepClaims 值为单个对象（旧单认领）→ 包装成数组
  */
 function _normalizeStepClaims(order) {
   const map = {}
-  const legacy = order && order.activeClaim
-  if (legacy && legacy.stepIndex !== undefined && legacy.stepIndex !== null) {
-    map[Number(legacy.stepIndex)] = legacy
-  }
   const sc = order && order.stepClaims
   if (sc && typeof sc === 'object') {
     for (const k of Object.keys(sc)) {
-      if (sc[k]) map[Number(k)] = sc[k]
+      const v = sc[k]
+      if (Array.isArray(v)) {
+        const list = v.filter(Boolean)
+        if (list.length > 0) map[Number(k)] = list
+      } else if (v) {
+        map[Number(k)] = [v]
+      }
     }
   }
+  const legacy = order && order.activeClaim
+  if (legacy && legacy.stepIndex !== undefined && legacy.stepIndex !== null) {
+    const idx = Number(legacy.stepIndex)
+    if (!map[idx]) map[idx] = [legacy]
+  }
   return map
+}
+
+/**
+ * 工序完成判定（并行模型统一口径）：
+ * stepDone[idx] 显式标记，或累计根数已达订单数量（stepDone 写入异常时的兜底）。
+ * 无数量工单（qty=0）：仅以 stepDone 标记为准（提交时由 completeStep 写入）。
+ * 老工单兼容：从未用过并行模型（无 stepDone 字段）时，顺序指针之前的工序视为已完成。
+ */
+function isStepDone(order, idx) {
+  if (order.stepDone && order.stepDone[idx]) return true
+  const qtyTarget = Number(order.qty) || 0
+  if (qtyTarget > 0 && (Number((order.stepQty || {})[idx]) || 0) >= qtyTarget) return true
+  if (!order.stepDone && idx < (Number(order.currentStepIndex) || 0)) return true
+  return false
+}
+
+/** 统计已完成工序数（并行模型：按 stepDone / 数量达标判定，不再按 currentStepIndex 顺序推进） */
+function countDoneSteps(order, steps) {
+  let n = 0
+  for (let i = 0; i < steps.length; i++) {
+    if (isStepDone(order, i)) n++
+  }
+  return n
 }
 
 function enrichOrder(order) {
@@ -194,6 +230,8 @@ function enrichOrder(order) {
   // 「当前工序」显示成「入库·仓管员」；现在越界时明确显示「已完成」
   const isAllDone = steps.length > 0 && curIdx >= steps.length
   const curStep = (!isAllDone && steps[curIdx]) ? steps[curIdx] : null
+  // 并行模型：进度 = 已完成工序数 / 总工序数（不再是顺序指针比例）
+  const doneCount = countDoneSteps(order, steps)
   return {
     ...order,
     steps,
@@ -203,7 +241,9 @@ function enrichOrder(order) {
     category: getOrderCategory(order),
     categoryLabel: getOrderStatusLabel(order),
     statusLabel: getOrderStatusLabel(order),
-    progress: steps.length > 0 ? Math.min(Math.round((curIdx / steps.length) * 100), 100) : 0,
+    progress: steps.length > 0 ? Math.min(Math.round((doneCount / steps.length) * 100), 100) : 0,
+    // 剩余未完成工序数（并行模型：按完成标记统计）
+    batchRemaining: Math.max(steps.length - doneCount, 0),
     currentStepName: steps.length === 0 ? '无工序' : (isAllDone ? '已完成' : curStep.name),
     currentStation: steps.length === 0 ? '' : (isAllDone ? '入库完成' : curStep.station)
   }
@@ -400,14 +440,36 @@ async function revertStep(orderId, stepKey, stepIndex, user) {
   }
   if (lastHistoryIdx < 0) throw new Error('该工序尚未完成，无法撤回')
 
-  // revertIndex 取 history 索引（currentStepIndex 指向被撤回工序本身，即该工序重新变为待执行）
+  // revertIndex 取 history 索引（被撤回工序及其之后的记录全部移除）
   // 以 history 记录为准，不再与 currentStepIndex 做冗余比较，避免数据不一致时误报
   const revertIndex = lastHistoryIdx
-  const removedRecords = history.slice(revertIndex)
-  const targetRecord = history[lastHistoryIdx]
+  const targetRecord = history[revertIndex]
+
+  // 【并行模型】老数据无 stepIndex 时按历史下标对齐（旧模型 1:1）
+  history.forEach((h, pos) => {
+    if (h.stepIndex === undefined || h.stepIndex === null) h.stepIndex = pos
+  })
+
+  // 撤回：移除该步骤及之后的所有历史记录
+  const newHistory = history.filter((h, idx) => idx < revertIndex)
+
+  // 按剩余历史重算 stepQty / stepDone / 当前工序指针（最后一条剩余记录的工序下标）
+  const qtyTarget = Number(order.qty) || 0
+  const newStepQty = {}
+  for (const h of newHistory) {
+    const q = Number(h.qty) || 0
+    if (q > 0) newStepQty[h.stepIndex] = (newStepQty[h.stepIndex] || 0) + q
+  }
+  const newStepDone = {}
+  Object.keys(newStepQty).forEach(k => {
+    if (qtyTarget > 0 && newStepQty[k] >= qtyTarget) newStepDone[k] = true
+  })
+  const lastRemain = newHistory[newHistory.length - 1]
+  const newPtr = lastRemain ? lastRemain.stepIndex : 0
 
   // 计算被移除记录中涉及下料的库存回退总量，按 (material, roughness) 分组汇总
   // removedRecords 已包含被撤回的目标工序本身及之后所有记录
+  const removedRecords = history.slice(revertIndex)
   const inventoryReturnMap = {}
   const blankingRecordsToRevert = removedRecords.filter(r => r.stepKey === 'blanking' && r.materialConsumption && r.materialConsumption.material)
 
@@ -432,8 +494,7 @@ async function revertStep(orderId, stepKey, stepIndex, user) {
   // 下料工序撤回：先乐观锁更新工单，成功后才回退库存（避免并发撤回导致库存被多次回退）
   const inventoryReturnItems = Object.values(inventoryReturnMap)
 
-  // 撤回：移除该步骤及之后的所有历史记录（包含被撤回工序本身），回退 currentStepIndex
-  const newHistory = history.filter((h, idx) => idx < revertIndex)
+  // 撤回后状态：已完工工单撤回时恢复为 processing（并行模型完工只能经 finalizeOrder）
   // 撤回已完工工单时，恢复到撤回前的有效状态：
   // - 若工单原本是 completed（说明是最后一个工序被撤回），恢复为 processing
   // - 若工单原本是 paused（数据不一致的边界场景），保持 paused
@@ -444,18 +505,22 @@ async function revertStep(orderId, stepKey, stepIndex, user) {
   // 撤回后确保 paused 标志与 status 一致（避免 paused=true 但 status='processing' 的不一致）
   const newPaused = newStatus === 'paused' ? true : (newStatus === 'completed' ? false : order.paused)
 
-  // 乐观锁：防止并发回退冲突（必须在回退库存之前完成，否则两个并发撤回会双倍回退库存）
+  // 乐观锁：防止并发回退冲突。并行模型下 currentStepIndex 随提交变化，改用
+  // 「被撤回位置记录哨兵」校验——并行提交只追加尾部、不移动已有下标，哨兵稳定
   const updateResult = await db.collection('orders').where({
     _id: order._id,
-    currentStepIndex: order.currentStepIndex,
-    status: order.status
+    status: order.status,
+    [`history.${revertIndex}.completedAt`]: targetRecord.completedAt
   }).update({
     data: {
       history: newHistory,
-      currentStepIndex: revertIndex,
+      currentStepIndex: newPtr,
       status: newStatus,
       paused: newPaused,
       completedDate: newCompletedDate,
+      // 按剩余历史整体重算（并行模型：stepQty/stepDone 不再依赖顺序指针）
+      stepQty: _.set(newStepQty),
+      stepDone: _.set(newStepDone),
       // 【按工序认领】撤回不再释放认领：未来工序的认领在撤回后依然有效，
       // 被撤回工序的认领已在完成时归档，员工可重新认领
       updatedAt: db.serverDate()
@@ -641,7 +706,8 @@ async function updateStepKeys(orderId, newStepKeys, user) {
   }
 
   // 归档被释放的认领流水（reason: stepKeys），员工可在新工序列表上重新认领
-  const releasedClaims = Object.values(_normalizeStepClaims(order))
+  // （多认领模型：值为人领对象数组，需扁平化后逐条归档）
+  const releasedClaims = Object.values(_normalizeStepClaims(order)).flat()
   for (const c of releasedClaims) {
     await _archiveClaim(c, {
       status: 'released',
@@ -1374,6 +1440,139 @@ async function _ensureClaimsCollection() {
   _claimsCollectionEnsured = true
 }
 
+// ===== 一键完成剩余工序（管理员直接执行；流转工需管理员审批）=====
+
+let _batchCollectionEnsured = false
+async function _ensureBatchCollection() {
+  if (_batchCollectionEnsured) return
+  try {
+    await db.createCollection('batch_approvals')
+  } catch (e) { /* 集合已存在或环境不支持，忽略 */ }
+  _batchCollectionEnsured = true
+}
+
+/**
+ * 执行一键完成：从当前工序起把所有未完成工序一次性完成并流转到完工
+ * 每道工序写一条 history（操作员 = 指定员工，根数 = 指定根数），月度统计自动计入
+ * 注意：不做下料材料库存扣减（一键完成一般用于尾段补录；下料请走正常流转）
+ */
+async function _executeBatchComplete(order, operator, qty, note, submitter) {
+  const steps = buildSteps(order.stepKeys)
+  if (steps.length === 0) throw new Error('工单没有工序')
+  if (order.paused) throw new Error('工单已暂停，请先恢复工单再一键完成')
+  const qtyNum = Number(qty)
+  if (!qtyNum || qtyNum <= 0) throw new Error('请填写有效的每道工序根数')
+
+  // 【并行模型】把所有未完成工序一次性填满到订单数量并标记完成（stepDone）；
+  // 工单不在此处标记完工——仍需入库仓管员在操作面板确认「工单已完成」
+  const targetIdxs = []
+  for (let i = 0; i < steps.length; i++) {
+    if (!isStepDone(order, i)) targetIdxs.push(i)
+  }
+  if (targetIdxs.length === 0) throw new Error('所有工序已完成，请直接确认工单完工')
+
+  const now = formatTime()
+  const newHistory = [...(order.history || [])]
+  const stepDonePatch = { ...(order.stepDone || {}) }
+  // 【兼容】老单无 stepDone 字段时，先把指针推断出的已完成工序显式落入 stepDone：
+  // 否则 _.set 整体覆盖后丢失完成语义，finalizeOrder 会误判「还有工序未完成」
+  for (let i = 0; i < steps.length; i++) {
+    if (stepDonePatch[i] !== true && isStepDone(order, i)) stepDonePatch[i] = true
+  }
+  const stepQtyPatch = { ...(order.stepQty || {}) }
+  for (const i of targetIdxs) {
+    const existingAcc = Number((order.stepQty || {})[i]) || 0
+    // 历史记录写增量：月度根数按 history.qty 累加，避免把已有累计重复计入
+    const delta = Math.max(qtyNum - existingAcc, 0)
+    newHistory.push({
+      stepKey: steps[i].key,
+      stepName: steps[i].name,
+      stepSeq: steps[i]._seq || 1,
+      stepIndex: i,
+      operatorId: operator._id,
+      operator: operator.name,
+      role: steps[i].station,
+      programmerId: '',
+      programmerName: '',
+      partnerRole: '',
+      partnerKeyword: '',
+      completedAt: now,
+      note: note || '',
+      qty: delta,
+      materialConsumption: null,
+      batch: true
+    })
+    stepDonePatch[i] = true
+    stepQtyPatch[i] = Math.max(qtyNum, existingAcc)
+  }
+  const lastIdx = targetIdxs[targetIdxs.length - 1]
+  const upd = await db.collection('orders').where({
+    _id: order._id,
+    status: order.status
+  }).update({
+    data: {
+      currentStepIndex: lastIdx,
+      history: newHistory,
+      stepDone: _.set(stepDonePatch),
+      stepQty: _.set(stepQtyPatch),
+      // 全部工序完成：清空所有认领（下方统一归档流水）
+      stepClaims: _.set({}),
+      ...(order.activeClaim ? { activeClaim: null } : {}),
+      updatedAt: db.serverDate()
+    }
+  })
+  if (upd.stats.updated === 0) throw new Error('工单状态已变更，请刷新后重试')
+
+  // 归档该工单全部进行中认领（实际操作人 = 提交者，认领人的「我的工单」同步移到已完成）
+  try {
+    await db.collection('order_claims').where({ orderId: order.id, status: 'active' }).update({
+      data: {
+        status: 'completed',
+        completedAt: now,
+        completedByName: submitter.name,
+        completedByRole: (submitter.role === 'admin' || submitter.role === 'superadmin') ? '管理员' : '流转工',
+        completedById: submitter._id
+      }
+    })
+  } catch (e) { /* 非关键 */ }
+
+  try {
+    await db.collection('audit_logs').add({
+      data: {
+        action: '一键完成剩余工序',
+        targetId: order.id,
+        targetName: `${targetIdxs.length} 道工序`,
+        operatorId: operator._id,
+        operatorName: operator.name,
+        detail: { submittedBy: submitter.name, submittedById: submitter._id, qty: qtyNum, steps: targetIdxs },
+        createdAt: db.serverDate()
+      }
+    })
+  } catch (e) { /* 非关键 */ }
+
+  return { completedCount: targetIdxs.length, order: await getOrder(order.id) }
+}
+
+// 待审批的一键完成申请（管理员视图）
+async function _listBatchApprovals() {
+  try {
+    const res = await db.collection('batch_approvals').where({ status: 'pending' }).orderBy('createdAt', 'desc').limit(50).get()
+    const out = []
+    for (const a of (res.data || [])) {
+      let order = null
+      try {
+        const oRes = await db.collection('orders').where({ id: a.orderId }).get()
+        if (oRes.data.length > 0) order = enrichOrder(oRes.data[0])
+      } catch (e) { /* 工单可能已被删除 */ }
+      out.push({ ...a, order })
+    }
+    return out
+  } catch (e) {
+    // 集合不存在（-502005）等情况返回空列表
+    return []
+  }
+}
+
 /**
  * 认领工单工序（按工序认领模型）
  * @param {string} orderId 工单ID
@@ -1397,27 +1596,25 @@ async function claimOrder(orderId, targetStepIndex, user) {
   if (order.paused && !isAdmin) throw new Error('工单已暂停，仅管理员可操作')
 
   const steps = buildSteps(order.stepKeys)
-  const curIdx = Number(order.currentStepIndex) || 0
-  if (steps.length === 0 || curIdx >= steps.length) throw new Error('工单工序已全部完成，无需认领')
+  if (steps.length === 0) throw new Error('工单没有工序，无需认领')
 
   // 目标工序下标：缺省 = 当前工序；必须是未完成的工序
+  // （并行模型：任意未完成工序均可认领，不要求排在 currentStepIndex 之后）
   let targetIdx = (targetStepIndex === undefined || targetStepIndex === null || targetStepIndex === '')
-    ? curIdx
+    ? (Number(order.currentStepIndex) || 0)
     : Number(targetStepIndex)
   if (!Number.isInteger(targetIdx) || targetIdx < 0 || targetIdx >= steps.length) {
     throw new Error('要认领的工序不存在')
   }
-  if (targetIdx < curIdx) {
-    throw new Error('该工序已完成，无法认领')
+  if (isStepDone(order, targetIdx)) {
+    throw new Error(`「${steps[targetIdx].name}」已完成，无法认领`)
   }
 
-  // 冲突/幂等判定：该工序已有人认领（含旧 activeClaim 懒迁移后的映射）
-  const existing = _normalizeStepClaims(order)[targetIdx] || null
-  if (existing && existing.userId === user._id) {
-    return { alreadyClaimed: true, claim: existing, order: await getOrder(orderId) }
-  }
-  if (existing) {
-    throw new Error(`「${existing.stepName || steps[targetIdx].name}」已被「${existing.userName || '其他员工'}」认领，需等其完成流转，或由管理员撤销认领`)
+  // 幂等判定：本人已认领该工序时重复调用直接成功（多认领模型：他人认领不再冲突）
+  const claimList = _normalizeStepClaims(order)[targetIdx] || []
+  const mine = claimList.find(c => c.userId === user._id)
+  if (mine) {
+    return { alreadyClaimed: true, claim: mine, order: await getOrder(orderId) }
   }
 
   const targetStep = steps[targetIdx]
@@ -1431,7 +1628,7 @@ async function claimOrder(orderId, targetStepIndex, user) {
   }
 
   const claim = {
-    claimId: `C_${orderId}_${targetIdx}_${Date.now()}`,
+    claimId: `C_${orderId}_${targetIdx}_${Date.now()}_${user._id}`,
     userId: user._id,
     userName: user.name,
     stepIndex: targetIdx,
@@ -1440,27 +1637,34 @@ async function claimOrder(orderId, targetStepIndex, user) {
     claimedAt: formatTime()
   }
 
-  // 原子认领，两个条件同时成立才写入：
-  //  1) currentStepIndex <= targetIdx —— 目标工序尚未被流转完成（流程推进超过目标工序时条件不成立）
-  //  2) stepClaims.<idx> 不存在或为 null —— 该工序此刻无人认领
+  // 原子条件：目标工序未完成（stepDone 未标记）才允许认领。
+  // 并行模型：currentStepIndex 随每次提交变化，不能再作认领锁；
+  // 多认领模型：同一工序允许多人认领，$push 原子追加，并发认领互不覆盖
   const claimPath = `stepClaims.${targetIdx}`
-  const lockBase = { _id: order._id, currentStepIndex: _.lte(targetIdx) }
-  const claimFreeCond = _.or([
-    { ...lockBase, [claimPath]: _.exists(false) },
-    { ...lockBase, [claimPath]: _.eq(null) }
-  ])
-  // 旧单认领模型懒迁移：activeClaim 搬进 stepClaims 映射并清空原字段
+  const lockCond = { _id: order._id, [`stepDone.${targetIdx}`]: _.neq(true) }
+  // 旧单认领模型懒迁移：activeClaim 搬进 stepClaims（数组）并清空原字段
   const legacy = order.activeClaim || null
-  const migrateData = (legacy && Number(legacy.stepIndex) !== targetIdx)
-    ? { [`stepClaims.${Number(legacy.stepIndex)}`]: _.set(legacy), activeClaim: _.set(null) }
-    : {}
-  const upd = await db.collection('orders').where(claimFreeCond).update({
-    // 【坑】update 传普通对象会被 SDK 拆成点路径合并更新，目标为 null 时报
-    // "Cannot create field in element"。认领对象必须用 _.set 整体替换。
-    data: { [claimPath]: _.set(claim), ...migrateData, updatedAt: db.serverDate() }
-  })
+  const legacyIdx = legacy ? Number(legacy.stepIndex) : null
+  let upd
+  if (legacy && legacyIdx === targetIdx) {
+    // 旧认领与本道工序同位 → 一次性写入数组 [旧认领, 新认领]
+    upd = await db.collection('orders').where(lockCond).update({
+      data: {
+        [claimPath]: _.set([legacy, claim]),
+        activeClaim: _.set(null),
+        updatedAt: db.serverDate()
+      }
+    })
+  } else {
+    const migrateData = legacy
+      ? { [`stepClaims.${legacyIdx}`]: _.set([legacy]), activeClaim: _.set(null) }
+      : {}
+    upd = await db.collection('orders').where(lockCond).update({
+      data: { [claimPath]: _.push({ each: [claim] }), ...migrateData, updatedAt: db.serverDate() }
+    })
+  }
   if (upd.stats.updated === 0) {
-    throw new Error('认领失败：工单状态已变更或该工序刚被他人认领，请刷新后重试')
+    throw new Error('认领失败：该工序可能刚被提交完成，请刷新后重试')
   }
 
   try {
@@ -1484,7 +1688,7 @@ async function claimOrder(orderId, targetStepIndex, user) {
  * @param {string} orderId 工单ID
  * @param {number} [targetStepIndex] 目标工序下标；缺省撤销当前工序的认领（兼容旧调用）
  */
-async function releaseClaim(orderId, targetStepIndex, user) {
+async function releaseClaim(orderId, targetStepIndex, user, claimId) {
   if (!user) throw new Error('用户不存在')
   if (user.status !== 'active') throw new Error('账号未启用')
   if (!orderId) throw new Error('缺少工单ID')
@@ -1498,24 +1702,35 @@ async function releaseClaim(orderId, targetStepIndex, user) {
     : Number(targetStepIndex)
   if (!Number.isInteger(targetIdx)) throw new Error('参数错误')
 
-  const claim = _normalizeStepClaims(order)[targetIdx] || null
-  if (!claim) throw new Error('该工序当前没有被认领')
+  const claimList = _normalizeStepClaims(order)[targetIdx] || []
+  if (claimList.length === 0) throw new Error('该工序当前没有被认领')
 
   const isAdmin = user.role === 'admin' || user.role === 'superadmin'
-  if (!isAdmin && claim.userId !== user._id) {
-    throw new Error('仅认领人本人或管理员可撤销认领')
+  // 多认领模型：指定 claimId 撤销具体某人的认领；缺省撤销本人的认领（管理员缺省撤第一条）
+  let claim
+  if (claimId) {
+    claim = claimList.find(c => c.claimId === claimId)
+    if (!claim) throw new Error('该认领不存在或已被处理')
+    if (!isAdmin && claim.userId !== user._id) {
+      throw new Error('仅认领人本人或管理员可撤销认领')
+    }
+  } else {
+    claim = claimList.find(c => c.userId === user._id)
+    if (!claim) {
+      if (!isAdmin) throw new Error('您没有认领该工序')
+      claim = claimList[0]
+    }
   }
-  const reason = isAdmin && claim.userId !== user._id ? 'admin_revoke' : 'self_cancel'
+  const reason = claim.userId !== user._id ? 'admin_revoke' : 'self_cancel'
+  const remain = claimList.filter(c => c.claimId !== claim.claimId)
 
-  // 条件更新：claimId 未被并发改过才清除，防止误删他人的新认领。
-  // 旧模型认领在 activeClaim 上，一并清空；新模型在 stepClaims.<idx> 上用 _.remove() 删除
+  // 数组模型：剩余认领用 _.set 整体替换（空则整键删除）；
+  // 旧模型认领在 activeClaim 上时一并清空
   const claimPath = `stepClaims.${targetIdx}`
+  const patchData = { [claimPath]: remain.length > 0 ? _.set(remain) : _.remove(), updatedAt: db.serverDate() }
   const legacyHere = order.activeClaim && Number(order.activeClaim.stepIndex) === targetIdx && order.activeClaim.claimId === claim.claimId
-  const upd = legacyHere
-    ? await db.collection('orders').where({ _id: order._id, 'activeClaim.claimId': claim.claimId })
-      .update({ data: { activeClaim: null, [claimPath]: _.remove(), updatedAt: db.serverDate() } })
-    : await db.collection('orders').where({ _id: order._id, [`${claimPath}.claimId`]: claim.claimId })
-      .update({ data: { [claimPath]: _.remove(), updatedAt: db.serverDate() } })
+  if (legacyHere) patchData.activeClaim = null
+  const upd = await db.collection('orders').where({ _id: order._id }).update({ data: patchData })
 
   await _archiveClaim(claim, {
     status: 'released',
@@ -1544,6 +1759,101 @@ async function releaseClaim(orderId, targetStepIndex, user) {
   } catch (e) { /* 非关键 */ }
 
   return { released: true, order: await getOrder(orderId) }
+}
+
+/**
+ * 确认工单完工（并行模型收尾）：
+ * 前置条件：所有工序都已完成（有人认领且累计根数达订单数量）。
+ * 操作者：入库工序的认领仓管员 / 岗位含「仓管员」的员工 / 管理员。
+ * 这是工单标记为 completed 的唯一入口（completeStep 不再自动完工）。
+ */
+async function finalizeOrder(orderId, user) {
+  if (!user) throw new Error('用户不存在')
+  if (user.status !== 'active') throw new Error('账号未启用')
+  if (!orderId) throw new Error('缺少工单ID')
+
+  const res = await db.collection('orders').where({ id: orderId }).get()
+  if (res.data.length === 0) throw new Error('工单不存在')
+  const order = res.data[0]
+  if (order.status === 'completed') throw new Error('工单已完工，无需重复确认')
+
+  const steps = buildSteps(order.stepKeys)
+  if (steps.length === 0) throw new Error('工单没有工序，无法完工')
+
+  // 校验：所有工序必须已完成（有人认领并提交足额根数）
+  const notDone = []
+  for (let i = 0; i < steps.length; i++) {
+    if (!isStepDone(order, i)) notDone.push(steps[i].name)
+  }
+  if (notDone.length > 0) {
+    const preview = notDone.slice(0, 3).join('、') + (notDone.length > 3 ? ` 等 ${notDone.length} 道` : '')
+    throw new Error(`还有 ${notDone.length} 道工序未完成（${preview}），全部提交根数后才能确认完工`)
+  }
+
+  // 操作者校验：入库工序认领人 / 岗位含「仓管员」/ 管理员
+  const isAdmin = user.role === 'admin' || user.role === 'superadmin'
+  const warehouseIdx = steps.findIndex(s => s.key === 'warehouse')
+  const claimsMap = _normalizeStepClaims(order)
+  const iAmWarehouseClaimant = warehouseIdx >= 0 &&
+    (claimsMap[warehouseIdx] || []).some(c => c.userId === user._id)
+  const stations = Array.isArray(user.stations) ? user.stations : (user.station ? [user.station] : [])
+  if (!isAdmin && !iAmWarehouseClaimant && !stations.includes('仓管员')) {
+    throw new Error('仅入库仓管员（或管理员）可确认工单完工')
+  }
+
+  const now = formatTime()
+  const completeEntry = {
+    stepKey: '__completed__',
+    stepName: '工单完工',
+    operatorId: user._id,
+    operator: user.name,
+    role: '仓管员',
+    completedAt: now,
+    note: '入库仓管员确认完工',
+    qty: null,
+    materialConsumption: null
+  }
+
+  // 乐观锁：仅当状态非 completed 时写入，防止并发重复确认
+  const upd = await db.collection('orders').where({
+    _id: order._id,
+    status: _.neq('completed')
+  }).update({
+    data: {
+      status: 'completed',
+      paused: false,
+      completedDate: now,
+      history: [...(order.history || []), completeEntry],
+      stepClaims: _.set({}),
+      ...(order.activeClaim ? { activeClaim: null } : {}),
+      updatedAt: db.serverDate()
+    }
+  })
+  if (upd.stats.updated === 0) {
+    throw new Error('工单状态已变更，请刷新后重试')
+  }
+
+  // 归档全部残留进行中认领
+  try {
+    await db.collection('order_claims').where({ orderId, status: 'active' }).update({
+      data: { status: 'completed', completedAt: now }
+    })
+  } catch (e) { /* 非关键 */ }
+
+  try {
+    await db.collection('audit_logs').add({
+      data: {
+        action: '确认工单完工',
+        targetId: orderId,
+        targetName: `${steps.length} 道工序全部完成`,
+        operatorId: user._id,
+        operatorName: user.name,
+        createdAt: db.serverDate()
+      }
+    })
+  } catch (e) { /* 非关键 */ }
+
+  return { order: await getOrder(orderId) }
 }
 
 /**
@@ -1698,7 +2008,77 @@ exports.main = async (event, context) => {
 
       case 'releaseClaim':
         if (!event.orderId) return { success: false, error: '缺少工单ID' }
-        return { success: true, ...(await releaseClaim(event.orderId, event.stepIndex, user)) }
+        return { success: true, ...(await releaseClaim(event.orderId, event.stepIndex, user, event.claimId)) }
+
+      case 'finalizeOrder':
+        if (!event.orderId) return { success: false, error: '缺少工单ID' }
+        return { success: true, ...(await finalizeOrder(event.orderId, user)) }
+
+      case 'batchComplete': {
+        if (!event.orderId) return { success: false, error: '缺少工单ID' }
+        const isAdm = user.role === 'admin' || user.role === 'superadmin'
+        const isFloaterU = (Array.isArray(user.stations) ? user.stations : []).includes('流转工')
+        if (!isAdm && !isFloaterU) return { success: false, error: '仅管理员或流转工可一键完成' }
+        const bRes = await db.collection('orders').where({ id: event.orderId }).get()
+        if (bRes.data.length === 0) return { success: false, error: '工单不存在' }
+        const batchOrder = bRes.data[0]
+        const opRes = await db.collection('users').doc(event.operatorId).get().catch(() => null)
+        if (!opRes || !opRes.data || opRes.data.status !== 'active') {
+          return { success: false, error: '指定的操作员不存在或未激活' }
+        }
+        if (isAdm) {
+          // 管理员：直接执行
+          const r = await _executeBatchComplete(batchOrder, opRes.data, event.qty, event.note, user)
+          return { success: true, approved: true, ...r }
+        }
+        // 流转工：生成审批单，任意管理员在小程序内通过后立即执行（竞相审批，先到先得）
+        await _ensureBatchCollection()
+        await db.collection('batch_approvals').add({
+          data: {
+            orderId: event.orderId,
+            requestedById: user._id,
+            requestedByName: user.name,
+            operatorId: event.operatorId,
+            operatorName: opRes.data.name,
+            qty: Number(event.qty) || 0,
+            note: event.note || '',
+            status: 'pending',
+            createdAt: db.serverDate()
+          }
+        })
+        return { success: true, pendingApproval: true }
+      }
+
+      case 'listBatchApprovals': {
+        requireAdmin(user)
+        return { success: true, approvals: await _listBatchApprovals() }
+      }
+
+      case 'reviewBatchComplete': {
+        requireAdmin(user)
+        if (!event.id) return { success: false, error: '缺少审批单ID' }
+        const apRes = await db.collection('batch_approvals').doc(event.id).get().catch(() => null)
+        if (!apRes || !apRes.data) return { success: false, error: '审批单不存在' }
+        const approval = apRes.data
+        if (approval.status !== 'pending') return { success: false, error: '该审批单已被处理（竞相审批以先处理者为准）' }
+        if (!event.approve) {
+          await db.collection('batch_approvals').doc(event.id).update({
+            data: { status: 'rejected', reviewedByName: user.name, reviewedAt: db.serverDate() }
+          })
+          return { success: true, approved: false }
+        }
+        const ordRes = await db.collection('orders').where({ id: approval.orderId }).get()
+        if (ordRes.data.length === 0) return { success: false, error: '工单不存在' }
+        const opRes2 = await db.collection('users').doc(approval.operatorId).get().catch(() => null)
+        if (!opRes2 || !opRes2.data || opRes2.data.status !== 'active') {
+          return { success: false, error: '指定的操作员不存在或未激活' }
+        }
+        const r = await _executeBatchComplete(ordRes.data[0], opRes2.data, approval.qty, approval.note, user)
+        await db.collection('batch_approvals').doc(event.id).update({
+          data: { status: 'approved', reviewedByName: user.name, reviewedAt: db.serverDate() }
+        })
+        return { success: true, approved: true, ...r }
+      }
 
       case 'listClaims':
         return { success: true, claims: await listClaims(event.scope, event.statuses, user) }

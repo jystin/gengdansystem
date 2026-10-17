@@ -482,26 +482,52 @@
 .prod-export-btn.primary { background: #0f766e; color: #fff; }
 .prod-export-btn.ghost { background: #f1f5f9; color: #475569; }
 
-.prod-scroll { width: 100%; overflow: auto; }
+/* 两层结构：左侧员工/月份列固定，右侧月份区独立横向滚动 */
+.prod-scroll { flex: 1 1 0; min-width: 0; overflow: auto; }
 
-.prod-table { min-width: 780rpx; }
+.prod-table { display: flex; align-items: flex-start; }
 
-.prod-row {
-  display: grid;
-  grid-template-columns: 180rpx repeat(12, 1fr) 80rpx;
-  gap: 6rpx; align-items: stretch;
-  padding: 10rpx 0; border-top: 1rpx solid #e2e8f0;
+.prod-fixed-col {
+  flex-shrink: 0;
+  width: calc(170rpx * var(--pz, 1));
+  border-right: 2rpx solid #e2e8f0;
+  box-shadow: 10rpx 0 14rpx -12rpx rgba(15, 23, 42, 0.18);
+  position: relative;
+  z-index: 2;
 }
 
-.prod-head { font-weight: 700; border-top: none; padding-top: 0; }
+.prod-fixed-cell {
+  height: calc(88rpx * var(--pz, 1));
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  font-size: calc(22rpx * var(--pz, 1));
+  background: #f8fafc;
+  border-top: 1rpx solid #e2e8f0;
+  padding: 0 calc(6rpx * var(--pz, 1));
+  overflow: hidden;
+}
+
+.prod-fixed-cell.prod-fixed-head { border-top: none; font-weight: 700; }
+
+.prod-months-inner { min-width: calc(660rpx * var(--pz, 1)); }
+
+.prod-months-inner .prod-row {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr) calc(96rpx * var(--pz, 1));
+  gap: calc(6rpx * var(--pz, 1));
+  padding: 0;
+  border-top: 1rpx solid #e2e8f0;
+  align-items: stretch;
+}
+
+.prod-months-inner .prod-row.prod-head { border-top: none; }
 
 .prod-cell {
-  padding: 8rpx 6rpx; border-radius: 8rpx;
-  background: #f8fafc; font-size: 22rpx; text-align: center;
-  min-height: 48rpx; display: flex; align-items: center; justify-content: center;
+  border-radius: 8rpx;
+  background: #f8fafc; font-size: calc(22rpx * var(--pz, 1)); text-align: center;
+  height: calc(88rpx * var(--pz, 1));
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 calc(4rpx * var(--pz, 1));
 }
-
-.name-cell { text-align: left; grid-column: 1 / 2; }
 
 .total-cell { font-weight: 700; }
 
@@ -516,8 +542,30 @@
   margin-bottom: 12rpx;
 }
 
-.prod-emp-name { font-size: 24rpx; font-weight: 600; }
-.prod-station { font-size: 20rpx; color: #64748b; }
+.prod-emp-name {
+  font-size: calc(24rpx * var(--pz, 1)); font-weight: 600;
+  max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 表格缩放工具条（月度统计） */
+.prod-zoom-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 16rpx; gap: 12rpx;
+}
+.prod-zoom-label { font-size: 24rpx; color: #64748b; }
+.prod-zoom-controls { display: flex; align-items: center; gap: 12rpx; }
+.prod-zoom-btn {
+  width: 64rpx; height: 64rpx; border-radius: 12rpx;
+  background: #ffffff; border: 2rpx solid #cbd5e1;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 36rpx; font-weight: 700; color: #334155;
+}
+.prod-zoom-btn.disabled { color: #cbd5e1; }
+.prod-zoom-val { font-size: 26rpx; font-weight: 700; color: #1d4ed8; min-width: 90rpx; text-align: center; }
+.prod-zoom-reset {
+  padding: 8rpx 20rpx; border-radius: 999rpx;
+  background: #f1f5f9; font-size: 24rpx; color: #475569;
+}
 
 /* ===== 主操作按钮：扫码进单 / 我的工单（员工高频入口，放大置顶）===== */
 .main-actions {

@@ -18,6 +18,25 @@
       </picker>
     </view>
 
+    <!-- 大字模式：只放大工单详情页文字，方便年纪大的员工看清 -->
+    <view class="switch-block elder-switch">
+      <view>
+        <text class="switch-label">大字模式</text>
+        <view class="switch-tip">放大工单详情页的文字</view>
+      </view>
+      <switch checked="{{elderMode}}" bindchange="toggleElderMode" color="#0f766e" />
+    </view>
+
+    <!-- 超管专属：一键切换超管/员工视角 + 编辑岗位 -->
+    <view wx:if="{{user.role === 'superadmin' || disguised}}" class="switch-block super-tools">
+      <view class="super-tools-row">
+        <button class="tool-btn {{disguised ? 'tool-btn-back' : ''}}" bindtap="toggleSuperIdentity">
+          {{disguised ? '切回超管身份' : '切换员工视角'}}
+        </button>
+        <button wx:if="{{!disguised}}" class="tool-btn tool-btn-station" bindtap="openStationEditor">编辑岗位</button>
+      </view>
+    </view>
+
     <view class="profile-stats" wx:if="{{user.role === 'admin' || user.role === 'superadmin'}}">
       <view class="stat-item">
         <text class="stat-value">{{dashboard.pendingEmployees || 0}}</text>
@@ -128,6 +147,38 @@
         <view class="subtle">{{item.target}} · {{item.operator}}</view>
       </view>
     </block>
+  </view>
+
+  <!-- 编辑岗位弹窗（仅超管）：选员工 → 勾选岗位 → 保存 -->
+  <view wx:if="{{showStationModal}}" class="modal-mask" bindtap="closeStationModal">
+    <view class="modal-panel" catchtap="noop">
+      <view class="modal-title">编辑员工岗位</view>
+      <view class="modal-sub">当前编辑：{{editingStationsName}}</view>
+      <scroll-view scroll-x class="emp-chips" enhanced show-scrollbar="{{false}}">
+        <view class="emp-chips-inner">
+          <view
+            wx:for="{{stationEmpList}}"
+            wx:key="id"
+            class="emp-chip {{editingStationsId === item.id ? 'active' : ''}}"
+            data-id="{{item.id}}"
+            bindtap="selectStationEmp"
+          >{{item.name}}</view>
+        </view>
+      </scroll-view>
+      <view class="station-grid">
+        <view
+          wx:for="{{allStations}}"
+          wx:key="station"
+          class="station-cell {{item.checked ? 'checked' : ''}}"
+          data-station="{{item.station}}"
+          bindtap="toggleStationCheck"
+        >{{item.name}}</view>
+      </view>
+      <view class="modal-actions">
+        <button class="modal-btn ghost" bindtap="closeStationModal">取消</button>
+        <button class="modal-btn primary" bindtap="saveStationEdit">保存</button>
+      </view>
+    </view>
   </view>
 
   <view class="privacy-footer">

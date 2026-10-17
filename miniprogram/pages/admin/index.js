@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const ui = require('../../utils/ui')
+const scan = require('../../utils/scan')
 
 function emptyCreateForm() {
   return {
@@ -116,7 +117,7 @@ Page({
   goHome() { wx.navigateBack({ delta: 1 }) },
   goToHome() { wx.reLaunch({ url: '/pages/home/index' }) },
   goProfile() { wx.navigateTo({ url: '/pages/profile/index' }) },
-  goScan() { wx.navigateTo({ url: '/pages/scan/index' }) },
+  goScan() { scan.scanAndOpenOrder() },
   goMaterial() { wx.navigateTo({ url: '/pages/material/index' }) },
 
   goCreateOrder() { wx.navigateTo({ url: '/pages/create-order/index' }) },

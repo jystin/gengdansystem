@@ -68,6 +68,13 @@ Page({
     selectedStepKeys: [],
     isAdmin: false,
     canComplete: false,
+    panelFlash: false,
+    // 一键完成剩余工序（管理员/流转工）
+    batchOpen: false,
+    batchQty: '',
+    batchSubmitting: false,
+    // 订单二维码折叠（下拉页面到底部或点标题展开）
+    qrExpanded: false,
     materialTypes: [],
     materialConsumption: { material: '', roughness: '', length: '', qty: '' },
     isBlankingStep: false,
@@ -92,7 +99,6 @@ Page({
     repeatTotalChoice: 1,    // 本工单该工序共需几道
     // ===== 员工选择弹层（操作员 / 编程员 共用）=====
     pickerTarget: '',        // '' | 'operator' | 'programmer'
-    pickerKeyword: '',
     pickerList: [],
     pendingDrawings: [],
     drawingUrls: [],
@@ -108,12 +114,27 @@ Page({
     // 小程序码重新生成状态
     qrRegenerating: false,
     // ===== 工单认领（按工序）=====
-    // claimState: 'none' 无人认领 | 'mine' 我认领的 | 'other' 他人认领的（当前工序，操作面板用）
-    // currentClaim: 当前工序的认领对象；stepClaimFlags: 每道工序的认领标志（列表用）
+    // stepClaimFlags: 每道工序的认领/完成标志（流转列表汇总行用）
+    // claimableSteps: 可认领的未完成工序；myClaimSteps: 我认领的未完成工序
     claimState: 'none',
     canClaim: false,
     currentClaim: null,
     stepClaimFlags: [],
+    claimableSteps: [],
+    myClaimSteps: [],
+    // 并行模型：面板当前填写的目标工序（-1 = 无）
+    selectedStepIdx: -1,
+    selectedAcc: 0,
+    selectedClaimNames: '',
+    selectedClaimCount: 0,
+    // 订单级进度：最新提交工序 + 完成道数 + 完工确认权限
+    lastSubmitStepName: '',
+    lastSubmitStepStation: '',
+    doneCount: 0,
+    totalSteps: 0,
+    allStepsDone: false,
+    canFinalize: false,
+    finalizing: false,
     claimBtnLoading: false,
     // ===== 编辑工单字段 =====
     editingFields: false,
@@ -139,12 +160,36 @@ Page({
       return
     }
     this.orderId = decodeURIComponent(orderId)
-    this.setData({ isDesktopPlatform: drawing.isDesktop() })
+    // 扫码进入时自动滚动到「操作面板」（普通浏览不滚动）
+    this._focusPanel = options.focus === 'panel'
+    // 大字模式（老年版）：个人中心可开关，只影响工单详情页字号
+    this.setData({
+      isDesktopPlatform: drawing.isDesktop(),
+      elderMode: !!wx.getStorageSync('elderMode')
+    })
     await this.refresh({ force: true })
+    if (this._focusPanel) {
+      this._focusPanel = false
+      setTimeout(() => {
+        wx.pageScrollTo({ selector: '.action-panel', duration: 300 }).catch(() => {})
+        this.setData({ panelFlash: true })
+        setTimeout(() => this.setData({ panelFlash: false }), 2500)
+      }, 350)
+    }
   },
 
   goToHome() {
     wx.reLaunch({ url: '/pages/home/index' })
+  },
+
+  /** 页面下拉到底部 → 自动展开折叠的订单二维码 */
+  onReachBottom() {
+    if (!this.data.qrExpanded) this.setData({ qrExpanded: true })
+  },
+
+  /** 点击二维码标题展开/收起 */
+  toggleQrSection() {
+    this.setData({ qrExpanded: !this.data.qrExpanded })
   },
 
   async onShow() {
@@ -259,6 +304,9 @@ Page({
       // 配合人员候选：岗位命中本工序 partnerKeyword 的在职员工（默认「编程」）；
       // 严格匹配，一个都没配则返回空列表并提示去员工管理配置岗位
       const progPick = api.pickPartnerEmployees(activeEmployees, acc.partnerKeyword)
+      // 工种后缀只显示一个命中配合岗关键字的工种（管理员显示「管理员」）
+      const programmerList = (progPick.list || [])
+        .map(e => ({ ...e, _stationDisplay: api.pickerStationDisplay(e, acc.partnerKeyword || '') }))
 
       // 图纸 URL 改为懒加载：先让首屏出来，再异步换临时链接
       const drawingUrls = await this._resolveDrawingUrls(order.drawings || [])
@@ -268,7 +316,7 @@ Page({
       this.setData({
         materialTypes: materialTypes || [],
         activeEmployees,
-        programmerEmployees: progPick.list,
+        programmerEmployees: programmerList,
         programmerFallback: progPick.fallback,
         drawingUrls,
         drawingCount,
@@ -687,51 +735,115 @@ Page({
   _computeAccessState(user, order) {
     const isAdmin = user.role === 'admin' || user.role === 'superadmin'
     const _stations = user.stations || (user.station ? [user.station] : [])
-    // 流转工：特殊工种，可填写操作面板并完成流转任意工序（其余权限与普通员工一致）
+    // 流转工：特殊工种，可认领/提交任意工序（其余权限与普通员工一致）
     const isFloater = _stations.includes(api.FLOATER_STATION)
-    const canComplete = order.status !== 'completed' && (isAdmin || isFloater || _stations.includes(order.currentStation))
-    const currentStep = order.steps && order.steps[order.currentStepIndex]
-    const isBlankingStep = currentStep && currentStep.key === 'blanking'
-    const autoLength = (isBlankingStep && order.drawingDetail && (order.drawingDetail.blankingLength || order.drawingDetail.length)) ? (order.drawingDetail.blankingLength || order.drawingDetail.length) : ''
 
-    // 配合人员（编程员 / 调字员）：后端 PROCESS_LIBRARY 标记 needPartner（兼容 needProgrammer）
-    const partner = api.resolvePartner(currentStep)
-    const isProgrammerStep = !!(partner.need && order.status !== 'completed')
+    // ===== 并行模型基础数据：工序相互独立，完成判定 = stepDone 标记或累计达数量 =====
+    const steps = order.steps || []
+    const qtyTarget = Number(order.qty) || 0
+    const stepQtyMap = order.stepQty || {}
+    const stepDoneMap = order.stepDone || {}
+    // 累计根数：优先读并行模型 stepQty；老单（旧顺序模型只写 history 不写 stepQty）
+    // 回退用 history 流水按工序汇总（新记录有 stepIndex，老记录按 stepKey 匹配）
+    const accFromHistory = (i) => ((order.history || []).filter(h => {
+      if (h.stepIndex !== undefined && h.stepIndex !== null) return Number(h.stepIndex) === i
+      return !!steps[i] && h.stepKey === steps[i].key
+    }).reduce((sum, h) => sum + (Number(h.qty) || 0), 0))
+    const accOf = (i) => { const v = Number(stepQtyMap[i]) || 0; return v > 0 ? v : accFromHistory(i) }
+    // 完成判定与后端 orderManager.isStepDone 同口径：
+    // stepDone 标记 / 累计达标 / 老单兼容（无 stepDone 字段时指针之前的工序视为已完成）
+    const doneOf = (i) => !!stepDoneMap[i] || (qtyTarget > 0 && accOf(i) >= qtyTarget) || (!order.stepDone && i < (Number(order.currentStepIndex) || 0))
+    const doneFlags = steps.map((s, i) => doneOf(i))
+    const doneCount = doneFlags.filter(Boolean).length
+    const allStepsDone = steps.length > 0 && doneCount === steps.length
+    const isCompleted = order.status === 'completed'
 
-    // 可重复工序（精车）：可选项从「第几道」到 maxRepeat（最多4道）
-    const isRepeatableStep = !!(currentStep && currentStep.repeatable && order.status !== 'completed')
-    const maxRepeat = (currentStep && Number(currentStep.maxRepeat)) || 4
-    const seq = (currentStep && currentStep._seq) || 1
-    const totalNow = (currentStep && currentStep._repeatTotal) || 1
-    const repeatOptions = []
-    if (isRepeatableStep) {
-      for (let n = seq; n <= maxRepeat; n++) {
-        repeatOptions.push({ value: n, label: `${n} 道` })
-      }
-    }
-    const repeatTotalChoice = Math.min(Math.max(totalNow, seq), maxRepeat)
-
-    // ===== 工单认领状态（按工序认领：stepClaims 为 { 工序下标: 认领对象 } 映射）=====
-    // 当前工序的认领决定操作面板的认领条；未来工序的认领在工序流转列表展示
-    const curIdxAcc = Number(order.currentStepIndex) || 0
+    // 认领映射（数组兼容）
     const stepClaims = order.stepClaims || {}
-    const currentClaim = stepClaims[curIdxAcc] || null
-    const claimState = !currentClaim ? 'none' : (currentClaim.userId === (user.id || '') ? 'mine' : 'other')
-    const canClaim = canComplete && claimState === 'none'
+    const toList = (v) => Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : [])
+    const meId = user.id || ''
+    const claimListOf = (i) => toList(stepClaims[i])
+    const claimAllowed = !isCompleted && (!order.paused || isAdmin)
 
-    // 工序流转列表每行的认领标志（WXML 做不了岗位匹配，这里预算好）
-    const claimAllowed = order.status !== 'completed' && (!order.paused || isAdmin)
-    const stepClaimFlags = (order.steps || []).map((s, i) => {
-      const c = stepClaims[i] || null
-      const st = !c ? 'none' : (c.userId === (user.id || '') ? 'mine' : 'other')
+    // 每道工序标志（认领人数/完成状态/累计根数），工序流转列表汇总行使用
+    const stepClaimFlags = steps.map((s, i) => {
+      const list = claimListOf(i)
+      const mine = list.some(c => c.userId === meId)
       return {
-        has: !!c,
-        mine: st === 'mine',
-        userName: c ? c.userName : '',
-        stepName: c ? (c.stepName || s.name) : '',
-        // 未来工序（尚未轮到）才在列表里显示认领按钮；当前工序在操作面板认领
-        canClaim: i > curIdxAcc && !c && claimAllowed && (isAdmin || isFloater || _stations.includes(s.station))
+        count: list.length,
+        names: list.map(c => c.userName || '').filter(Boolean).join('、'),
+        has: list.length > 0,
+        mine,
+        done: doneFlags[i],
+        acc: accOf(i),
+        qty: qtyTarget,
+        stepName: s.name,
+        // 未完成 + 未认领过 + 岗位匹配（或管理/流转工）→ 可认领
+        canClaim: claimAllowed && !doneFlags[i] && !mine && (isAdmin || isFloater || _stations.includes(s.station))
       }
+    })
+
+    // 我认领的未完成工序（面板填写目标候选）
+    const myClaimSteps = steps
+      .map((s, i) => ({ s, i }))
+      .filter(x => !doneFlags[x.i] && claimListOf(x.i).some(c => c.userId === meId))
+      .map(x => ({ index: x.i, stepName: x.s.name, station: x.s.station || '', acc: accOf(x.i) }))
+
+    // 可认领工序：全部未完成 + 岗位匹配（或管理/流转工），含已被他人认领的（可加入协作）
+    const claimableSteps = steps
+      .map((s, i) => {
+        const f = stepClaimFlags[i]
+        if (doneFlags[i] || (!f.canClaim && !f.has)) return null
+        return {
+          index: i, stepName: s.name, station: s.station || '',
+          canClaim: f.canClaim, mine: f.mine, has: f.has, names: f.names, count: f.count, acc: accOf(i)
+        }
+      })
+      .filter(Boolean)
+
+    // ===== 面板填写目标工序（selectedStepIdx）=====
+    // 优先保持用户已选；失效（越界/已完成）时回退：我认领的第一道 → 管理/流转工取第一道未完成 → -1
+    let selIdx = Number(this.data.selectedStepIdx)
+    const selValid = Number.isInteger(selIdx) && selIdx >= 0 && selIdx < steps.length && !doneFlags[selIdx]
+    if (!selValid) {
+      selIdx = myClaimSteps.length > 0 ? myClaimSteps[0].index
+        : (steps.length > 0 && (isAdmin || isFloater) ? steps.findIndex((s, i) => !doneFlags[i]) : -1)
+    }
+    const selectedStep = selIdx >= 0 ? steps[selIdx] : null
+    const iClaimedSelected = selIdx >= 0 && claimListOf(selIdx).some(c => c.userId === meId)
+    // 能否提交：工单未完成 + 有有效目标工序 + 我认领了它（管理员/流转工跨认领放行）
+    const canComplete = !isCompleted && selIdx >= 0 && (isAdmin || isFloater || iClaimedSelected)
+
+    // 面板表单按选中工序渲染
+    const isBlankingStep = !!(selectedStep && selectedStep.key === 'blanking') && canComplete
+    const autoLength = (isBlankingStep && order.drawingDetail && (order.drawingDetail.blankingLength || order.drawingDetail.length)) ? (order.drawingDetail.blankingLength || order.drawingDetail.length) : ''
+    const partner = api.resolvePartner(selectedStep)
+    const isProgrammerStep = !!(partner.need && canComplete)
+    // 并行模型：工序下标被认领/提交数据引用，运行期不再增删重复工序，隐藏道数调整
+    const isRepeatableStep = false
+    const repeatOptions = []
+    const repeatTotalChoice = 1
+
+    // 订单级进度提示：最新提交的工序（currentStepIndex 新语义 = 最后提交的工序）
+    const lastPtr = Number(order.currentStepIndex) || 0
+    const lastStep = steps[lastPtr]
+
+    // 完工确认：全部工序完成 + 我有权限（入库认领人/仓管员/管理员）
+    const warehouseIdx = steps.findIndex(s => s.key === 'warehouse')
+    const iAmWarehouseClaimant = warehouseIdx >= 0 && claimListOf(warehouseIdx).some(c => c.userId === meId)
+    const canFinalize = allStepsDone && !isCompleted && (isAdmin || iAmWarehouseClaimant || _stations.includes('仓管员'))
+
+    // 选中工序的累计/认领信息（表单区展示）
+    const selectedAcc = selIdx >= 0 ? accOf(selIdx) : 0
+    const selectedClaimList = selIdx >= 0 ? claimListOf(selIdx) : []
+    const selectedClaimNames = selectedClaimList.map(c => c.userName || '').filter(Boolean).join('、')
+
+    // 工序 → 历史记录分组（新数据带 stepIndex 精确分组；老数据按 1:1 下标对齐）
+    const hist = order.history || []
+    const useStepIndex = hist.length > 0 && typeof hist[0].stepIndex === 'number'
+    const stepRecordLines = steps.map((s, i) => {
+      if (useStepIndex) return hist.filter(h => h.stepIndex === i)
+      return i < hist.length ? [hist[i]] : []
     })
 
     return {
@@ -739,12 +851,20 @@ Page({
       isProgrammerStep, isRepeatableStep, repeatOptions, repeatTotalChoice,
       partnerLabel: partner.label,
       partnerKeyword: partner.keyword,
-      currentStepKey: currentStep ? currentStep.key : '',
-      currentStepStation: currentStep ? (currentStep.station || '') : '',
-      currentStepName: currentStep ? (currentStep.name || '') : '',
-      currentStepIndex: Number(order.currentStepIndex) || 0,
-      currentClaim, stepClaimFlags,
-      claimState, canClaim
+      // 表单上下文 = 选中工序
+      selectedStepIdx: selIdx,
+      currentStepKey: selectedStep ? selectedStep.key : '',
+      currentStepStation: selectedStep ? (selectedStep.station || '') : '',
+      currentStepName: selectedStep ? (selectedStep.name || '') : '',
+      selectedAcc, selectedClaimNames, selectedClaimCount: selectedClaimList.length,
+      // 订单级进度（最后提交工序 + 完成道数）
+      currentStepIndex: lastPtr,
+      lastSubmitStepName: lastStep ? (lastStep.name || '') : '',
+      lastSubmitStepStation: lastStep ? (lastStep.station || '') : '',
+      doneCount, totalSteps: steps.length, allStepsDone, canFinalize,
+      stepClaimFlags, stepRecordLines, claimableSteps, myClaimSteps,
+      qtyTarget,
+      batchRemaining: Math.max(steps.length - doneCount, 0)
     }
   },
 
@@ -763,10 +883,24 @@ Page({
       isRepeatableStep: acc.isRepeatableStep,
       repeatOptions: acc.repeatOptions,
       repeatTotalChoice: acc.repeatTotalChoice,
-      claimState: acc.claimState,
-      canClaim: acc.canClaim,
-      currentClaim: acc.currentClaim || null,
+      // 并行模型：选中工序 + 订单级进度 + 完工确认
+      selectedStepIdx: acc.selectedStepIdx,
+      selectedAcc: acc.selectedAcc || 0,
+      selectedClaimNames: acc.selectedClaimNames || '',
+      selectedClaimCount: acc.selectedClaimCount || 0,
+      currentStepIndex: Number(acc.currentStepIndex) || 0,
+      lastSubmitStepName: acc.lastSubmitStepName || '',
+      lastSubmitStepStation: acc.lastSubmitStepStation || '',
+      doneCount: acc.doneCount || 0,
+      totalSteps: acc.totalSteps || 0,
+      allStepsDone: !!acc.allStepsDone,
+      canFinalize: !!acc.canFinalize,
       stepClaimFlags: acc.stepClaimFlags || [],
+      claimableSteps: acc.claimableSteps || [],
+      myClaimSteps: acc.myClaimSteps || [],
+      stepRecordLines: acc.stepRecordLines || [],
+      qtyTarget: acc.qtyTarget || 0,
+      batchRemaining: acc.batchRemaining || 0,
       // 工序变了 → 操作员候选池随之变化，非法选择自动回退（管理员全程有效，选择被保留）
       ...this._operatorPoolPatch(acc)
     }
@@ -783,20 +917,33 @@ Page({
    */
   _operatorPoolPatch(acc, poolOverride) {
     const all = poolOverride || this.data.activeEmployees || []
-    const pool = api.pickOperatorEmployees(all, (acc && acc.currentStepStation) || '')
+    const stepStation = (acc && acc.currentStepStation) || ''
+    // 工种后缀只显示一个与当前工序匹配的工种（管理员显示「管理员」）
+    const pool = api.pickOperatorEmployees(all, stepStation)
+      .map(e => ({ ...e, _stationDisplay: api.pickerStationDisplay(e, stepStation) }))
     if (this.data.operatorId && pool.some(e => e.id === this.data.operatorId)) {
       return { operatorEmployees: pool }
     }
     const app = getApp()
     const me = (app && app.globalData && app.globalData.currentUser) || {}
-    const self = me.id ? pool.find(e => e.id === me.id) : null
-    const preferred = self || pool[0]
-    if (!preferred) return { operatorEmployees: pool, operatorId: '', operatorLabel: '' }
-    const st = api.getEmployeeDisplayStations(preferred)
+    const meStations = Array.isArray(me.stations) ? me.stations : (me.station ? [me.station] : [])
+    const meIsAdmin = me.role === 'admin' || me.role === 'superadmin'
+    // 本人是否有当前工序的操作权限：管理员 / 流转工 / 岗位匹配（超管不在候选池也算有权限）
+    const hasPermission = meIsAdmin
+      || !!(acc && acc.isFloater)
+      || (!!acc && meStations.includes(acc.currentStepStation))
+    const self = (me.id && hasPermission)
+      ? { id: me.id, name: me.name || '', stations: meStations, _stationDisplay: api.pickerStationDisplay(me, stepStation) }
+      : (me.id ? pool.find(e => e.id === me.id) : null)
+    // 默认自己（仅当本人有当前工序的操作权限）；无权限则不默认显示
+    if (!self) {
+      return { operatorEmployees: pool, operatorId: '', operatorLabel: '' }
+    }
+    const st = api.pickerStationDisplay(self, stepStation)
     return {
       operatorEmployees: pool,
-      operatorId: preferred.id,
-      operatorLabel: preferred.name + (st ? ` · ${st}` : '')
+      operatorId: self.id,
+      operatorLabel: self.name + (st ? ` · ${st}` : '')
     }
   },
 
@@ -852,30 +999,29 @@ Page({
         : `当前工序仅限${this.data.currentStepStation || '对应岗位'}或管理员操作，暂无可选人员，请到员工管理配置岗位`)
       return
     }
-    this.setData({ pickerTarget: target, pickerKeyword: '', pickerList: list })
+    this.setData({ pickerTarget: target, pickerList: list })
   },
 
   hideEmployeePicker() {
-    this.setData({ pickerTarget: '', pickerKeyword: '' })
+    this.setData({ pickerTarget: '' })
   },
 
   onPickerPanelTap() { /* 阻止冒泡 */ },
-
-  onPickerSearchInput(event) {
-    this._inputFocusing = true
-    this.setData({ pickerKeyword: event.detail.value.trim() })
-  },
 
   selectEmployee(event) {
     const id = event.currentTarget.dataset.id
     const emp = (this.data.pickerList || []).find(e => e.id === id)
     if (!emp) return
-    const stationDisplay = api.getEmployeeDisplayStations(emp)
+    // 后缀只显示一个匹配工种：操作员按当前工序岗位；配合人员按关键字（编程/调字）
+    const match = this.data.pickerTarget === 'programmer'
+      ? (this.data.partnerKeyword || '')
+      : (this.data.currentStepStation || '')
+    const stationDisplay = api.pickerStationDisplay(emp, match)
     const label = emp.name + (stationDisplay ? ` · ${stationDisplay}` : '')
     if (this.data.pickerTarget === 'programmer') {
-      this.setData({ programmerId: emp.id, programmerLabel: label, pickerTarget: '', pickerKeyword: '' })
+      this.setData({ programmerId: emp.id, programmerLabel: label, pickerTarget: '' })
     } else {
-      this.setData({ operatorId: emp.id, operatorLabel: label, pickerTarget: '', pickerKeyword: '' })
+      this.setData({ operatorId: emp.id, operatorLabel: label, pickerTarget: '' })
     }
   },
 
@@ -905,9 +1051,11 @@ Page({
     }
 
     if (!this.data.operatorId) { ui.toast('请选择操作员'); return }
-    // 工序操作员必须岗位匹配（管理员不受限）——与后端校验同口径，避免提交后才报错
+    // 工序操作员必须岗位匹配（管理员不受限）——与后端校验同口径，避免提交后才报错；
+    // 选自己始终允许（本人有面板操作权限才进得来，超管不在候选池也合法）
     const opPool = this.data.operatorEmployees || []
-    if (opPool.length > 0 && !opPool.some(e => e.id === this.data.operatorId)) {
+    const meId = (getApp().globalData.currentUser || {}).id
+    if (opPool.length > 0 && this.data.operatorId !== meId && !opPool.some(e => e.id === this.data.operatorId)) {
       ui.toast(`当前工序仅允许${this.data.currentStepStation || '对应岗位'}或管理员操作`)
       return
     }
@@ -930,15 +1078,28 @@ Page({
       ui.showLoading('提交中...')
       const result = await api.completeCurrentStep({
         orderId: this.orderId,
+        // 并行模型：提交目标是面板选中的工序
+        stepIndex: this.data.selectedStepIdx,
         operatorId: this.data.operatorId,
         note,
         completedQty: isBlankingStep ? null : completedQty,
         materialConsumption: submitConsumption,
         // 编程员（后端校验岗位，非编程员会被拒绝）
-        programmerId: isProgrammerStep ? this.data.programmerId : '',
-        // 精车多道：本工单该工序共需几道，后端按差值追加/回收未完成的重复工序
-        repeatTotal: isRepeatableStep ? this.data.repeatTotalChoice : undefined
+        programmerId: isProgrammerStep ? this.data.programmerId : ''
       })
+      // 多人协作：该工序累计未满订单数量 → 部分提交，工序保持进行中
+      if (result && result.partial) {
+        ui.hideLoading()
+        this.setData({
+          note: '',
+          completedQty: '',
+          materialConsumption: { material: '', roughness: '', length: '', qty: '' },
+          calcWeightInfo: null
+        })
+        await this.refresh({ force: true })
+        ui.toast(`已记录 ${isBlankingStep ? materialConsumption.qty : completedQty} 根，该工序累计 ${result.accumulated}/${result.qtyTarget} 根`, 'none')
+        return
+      }
       const order = ensureStepKeys(result && result.order ? result.order : result)
       const app = getApp()
       const acc = this._computeAccessState(app.globalData.currentUser, order)
@@ -956,7 +1117,7 @@ Page({
       })
       this._panelKey = `${order.id || this.orderId}#${acc.currentStepIndex}`
       ui.hideLoading()
-      ui.toast('工序已完成并流转', 'success')
+      ui.toast(`已完成「${this.data.currentStepName || '工序'}」`, 'success')
     } catch (e) {
       ui.hideLoading()
       ui.handleError(e, '提交失败')
@@ -987,12 +1148,84 @@ Page({
     }
   },
 
+  // ===== 一键完成剩余所有工序（管理员直接执行；流转工需管理员审批）=====
+
+  toggleBatchForm() {
+    this.setData({ batchOpen: !this.data.batchOpen, batchQty: '' })
+  },
+
+  onBatchQtyInput(event) {
+    this.setData({ batchQty: event.detail.value })
+  },
+
+  async submitBatchComplete() {
+    if (this.data.batchSubmitting) return
+    const qty = Number(this.data.batchQty)
+    if (!qty || qty <= 0) { ui.toast('请填写每道工序的根数'); return }
+    const operatorId = this.data.operatorId
+    if (!operatorId) { ui.toast('请先在上方选择工序操作员'); return }
+    const ok = await ui.confirm('确定一键完成剩余所有工序吗？', '一键完成', { confirmColor: '#b45309', modalTimeout: 6000, fallbackOnTimeout: true })
+    if (!ok) return
+    this.setData({ batchSubmitting: true })
+    try {
+      ui.showLoading('提交中...')
+      const r = await api.batchComplete(this.orderId, operatorId, qty)
+      ui.hideLoading()
+      this.setData({ batchOpen: false, batchQty: '' })
+      if (r && r.pendingApproval) {
+        ui.toast('已提交，等待管理员审批', 'success')
+      } else {
+        ui.toast(`已一键完成 ${r.completedCount} 道工序，工单完工`, 'success')
+      }
+      await this.refresh({ force: true })
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '一键完成失败')
+    } finally {
+      this.setData({ batchSubmitting: false })
+    }
+  },
+
   // ===== 工单认领（按工序）=====
 
   /** 认领当前工序：后端校验岗位匹配/无人认领，幂等可重复点击 */
   async claimCurrentStep() {
     const idx = Number(this.data.order && this.data.order.currentStepIndex) || 0
     await this._claimStepAt(idx)
+  },
+
+  /** 面板切换填写的目标工序（在我认领的工序 chips 间切换） */
+  selectPanelStep(event) {
+    const idx = Number(event.currentTarget.dataset.stepIndex)
+    if (!Number.isInteger(idx)) return
+    this.setData({ selectedStepIdx: idx })
+    // 重算表单上下文（下料字段/编程员/操作员候选池随工序变化）
+    const app = getApp()
+    const order = this.data.order
+    if (order) {
+      const acc = this._computeAccessState(app.globalData.currentUser, order)
+      this.setData(this._stepPatch(acc))
+    }
+  },
+
+  /** 确认工单完工（并行模型收尾）：全部工序完成后由入库仓管员/管理员触发 */
+  async finalizeOrderConfirm() {
+    if (this.data.finalizing) return
+    const ok = await ui.confirm('确认所有工序已完成，工单完工？', '工单已完成')
+    if (!ok) return
+    this.setData({ finalizing: true })
+    try {
+      ui.showLoading('确认完工中...')
+      await api.finalizeOrder(this.orderId)
+      ui.hideLoading()
+      await this.refresh({ force: true })
+      ui.toast('工单已完工', 'success')
+    } catch (e) {
+      ui.hideLoading()
+      ui.handleError(e, '确认完工失败')
+    } finally {
+      this.setData({ finalizing: false })
+    }
   },
 
   /** 认领指定工序（工序流转列表里的未来工序按钮） */
@@ -1033,16 +1266,23 @@ Page({
     await this._releaseStepAt(idx)
   },
 
-  /** 按下标撤销认领的统一入口 */
+  /** 按下标撤销认领的统一入口（多认领模型：stepClaims[idx] 是认白数组） */
   async _releaseStepAt(idx) {
-    const claim = ((this.data.order && this.data.order.stepClaims) || {})[idx] || null
-    if (!claim) return
+    const raw = ((this.data.order && this.data.order.stepClaims) || {})[idx]
+    // 兼容数组（新模型）与单对象（旧缓存）：统一归一化为数组
+    const list = Array.isArray(raw) ? raw.filter(Boolean) : (raw ? [raw] : [])
+    if (list.length === 0) return
     const me = getApp().globalData.currentUser || {}
-    const isSelf = claim.userId === me.id
+    const myClaim = list.find(c => c.userId === me.id)
+    const isSelf = !!myClaim
+    // 工序名：优先取认领记录上的，缺失时回退到步骤定义
+    const stepName = list[0].stepName || ((this.data.order.steps || [])[idx] || {}).name || ''
+    // 被撤销人名字列表（管理员撤销他人时展示）
+    const names = list.map(c => c.userName).filter(Boolean).join('、')
     const ok = await ui.confirm(
       isSelf
-        ? `确定取消认领「${claim.stepName}」吗？取消后其他员工可重新认领该工序。`
-        : `确定撤销「${claim.userName}」对「${claim.stepName}」的认领吗？撤销后其他员工可重新认领该工序。`,
+        ? `确定取消认领「${stepName}」吗？取消后其他员工可重新认领该工序。`
+        : `确定撤销「${names || '该员工'}」对「${stepName}」的认领吗？撤销后其他员工可重新认领该工序。`,
       isSelf ? '取消认领' : '撤销认领',
       { confirmColor: '#b45309', modalTimeout: 4000, fallbackOnTimeout: true }
     )
@@ -1051,7 +1291,15 @@ Page({
     this.setData({ claimBtnLoading: true })
     try {
       ui.showLoading('处理中...')
-      await api.releaseClaim(this.orderId, idx)
+      if (isSelf) {
+        // 只取消本人认领（不误伤同工序其他认领人）
+        await api.releaseClaim(this.orderId, idx, myClaim.claimId)
+      } else {
+        // 管理员撤销他人：该工序全部认领逐条撤销（后端一次撤一条）
+        for (const c of list) {
+          await api.releaseClaim(this.orderId, idx, c.claimId)
+        }
+      }
       ui.hideLoading()
       ui.toast(isSelf ? '已取消认领' : '已撤销认领', 'success')
       await this.refresh({ force: true })

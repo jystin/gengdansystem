@@ -507,3 +507,114 @@
   background: #fee2e2;
   color: #b91c1c;
 }
+
+/* ===== 一键完成审批（管理员横幅 + 弹窗）===== */
+.batch-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16rpx;
+  padding: 16rpx 22rpx;
+  border-radius: 14rpx;
+  background: #fffbeb;
+  border: 2rpx solid #fde68a;
+}
+
+.batch-banner-text {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #b45309;
+}
+
+.batch-banner-arrow {
+  font-size: 32rpx;
+  color: #b45309;
+}
+
+.batch-mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.batch-panel {
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 28rpx;
+  box-sizing: border-box;
+}
+
+.batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20rpx;
+}
+
+.batch-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.batch-close {
+  font-size: 34rpx;
+  color: #94a3b8;
+  padding: 8rpx;
+  line-height: 1;
+}
+
+.batch-empty {
+  padding: 20rpx 0;
+  text-align: center;
+}
+
+.batch-item {
+  padding: 20rpx;
+  border-radius: 14rpx;
+  background: #f8fafc;
+  margin-bottom: 16rpx;
+}
+
+.batch-order {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #0f172a;
+  margin-right: 12rpx;
+}
+
+.batch-line {
+  margin-top: 6rpx;
+}
+
+.batch-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16rpx;
+  margin-top: 14rpx;
+}
+
+.batch-btn {
+  margin: 0;
+  font-size: 24rpx;
+  padding: 0 28rpx;
+  border-radius: 999rpx;
+  line-height: 2.2;
+}
+
+.batch-btn.reject {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.batch-btn.accept {
+  background: #0f766e;
+  color: #ffffff;
+}
